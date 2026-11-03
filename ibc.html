@@ -1,0 +1,254 @@
+<!-- ====================================================================== -->
+<!-- IBC SECTION (INTER-BILL & BSEG COMPARISON - CC&B 25.4)                 -->
+<!-- ====================================================================== -->
+<div id="ibcSection" class="bulk-card" style="display: none;">
+    <!-- Header & Template Download -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px solid #edf2f7; padding-bottom: 12px;">
+        <div>
+            <div class="bulk-title" style="margin-bottom: 4px;">IBC - Inter-Bill & Segment Validation (CC&B 25.4)</div>
+            <div style="font-size: 12px; color: #718096;">Automated SQL Table-to-Table Reconciliation (CI_BILL_MSGS, CI_BSEG_MSG, CALC, READ, SQ, CALC_LN)</div>
+        </div>
+        <a href="/api/ibc/template" download class="download-zip-btn" style="margin-top: 0; background: #4a5568; font-size: 13px; padding: 8px 14px;">
+            📄 Download User_Input Template (.xlsx)
+        </a>
+    </div>
+
+    <!-- Credentials & Scope Selection Grid -->
+    <div class="bulk-grid" style="grid-template-columns: 1.3fr 0.8fr 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+        <div class="bulk-field">
+            <label for="ibcScope">Validation Scope / Level</label>
+            <select id="ibcScope" style="border: 2px solid #007bff; font-weight: 600; color: #003366;">
+                <option value="bill_and_bseg">Bill Level Validation (Bill + BSEG Level)</option>
+                <option value="bseg_only">BSEG Level Only (Skip Bill Level)</option>
+            </select>
+        </div>
+        <div class="bulk-field">
+            <label for="ibcEnv">Environment</label>
+            <select id="ibcEnv">
+                <option value="oe">OE</option>
+                <option value="on">ON</option>
+                <option value="ln">LN</option>
+            </select>
+        </div>
+        <div class="bulk-field">
+            <label for="ibcUser">DB Username</label>
+            <input type="text" id="ibcUser" placeholder="Enter DB Username" />
+        </div>
+        <div class="bulk-field">
+            <label for="ibcPass">DB Password</label>
+            <input type="password" id="ibcPass" placeholder="Enter DB Password" />
+        </div>
+    </div>
+
+    <!-- Input Box: File Upload OR Quick Pair Entry -->
+    <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-bottom: 18px;">
+        <div class="bulk-upload-box" style="margin-bottom: 0; padding: 14px;">
+            <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #2d3748; font-size: 13px;">
+                Option 1: Upload User_Input Excel File (Batch or Single)
+            </label>
+            <input type="file" id="ibcFile" accept=".xlsx,.xls" />
+        </div>
+        <div style="border: 1px solid #cbd5e0; border-radius: 6px; padding: 14px; background: #f8fafc;">
+            <label style="display: block; font-weight: 600; margin-bottom: 8px; color: #2d3748; font-size: 13px;">
+                Option 2: Quick Single Pair Entry (Optional if no file uploaded)
+            </label>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="ibcNewId" placeholder="New Bill / BSEG ID (12-digit)" maxlength="12" style="flex: 1; padding: 8px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;" />
+                <input type="text" id="ibcOldId" placeholder="Cancelled Bill / BSEG ID" maxlength="12" style="flex: 1; padding: 8px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;" />
+            </div>
+        </div>
+    </div>
+
+    <!-- Execute Button -->
+    <button type="button" id="runIbcBtn" class="run-bulk-button" onclick="startIbcRun()">
+        ▶ Run IBC Table-to-Table Validation
+    </button>
+
+    <!-- Progress Bar Box -->
+    <div id="ibcProgressContainer" class="progress-box" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div id="ibcStatusText" style="font-weight: 600; color: #2d3748;">Initializing IBC Engine...</div>
+            <div id="ibcPercentText" style="font-weight: 700; color: #007bff;">0%</div>
+        </div>
+        <div class="progress-bar-bg">
+            <div id="ibcProgressBar" class="progress-bar-fill"></div>
+        </div>
+    </div>
+
+    <!-- ================================================================== -->
+    <!-- IBC RESULTS DASHBOARD (KPIs, CHARTS, E-COMMERCE FILTERS, TABLES)   -->
+    <!-- ================================================================== -->
+    <div id="ibcDashboardArea" style="display: none; margin-top: 24px;">
+        <!-- Top Download Banner -->
+        <div style="display: flex; justify-content: space-between; align-items: center; background: #edf2f7; padding: 12px 16px; border-radius: 6px; margin-bottom: 18px;">
+            <div style="font-weight: 700; color: #1a202c; font-size: 14px;">
+                ✅ Validation Complete — Consolidated Reports Ready
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <a id="ibcMasterDownloadBtn" href="#" class="download-zip-btn" style="margin-top: 0; background: #28a745; padding: 8px 14px; font-size: 13px;">
+                    📊 Download Master Summary Excel (.xlsx)
+                </a>
+                <a id="ibcZipDownloadBtn" href="#" class="download-zip-btn" style="margin-top: 0; background: #007bff; padding: 8px 14px; font-size: 13px;">
+                    📦 Download All Reports Bundle (.zip)
+                </a>
+            </div>
+        </div>
+
+        <!-- 5 KPI Badges -->
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px;">
+            <div style="background: #fff; border: 1px solid #e2e8f0; border-left: 5px solid #003366; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 11px; font-weight: 700; color: #718096; text-transform: uppercase;">Bills / BSEGs Validated</div>
+                <div id="ibcKpiPairs" style="font-size: 22px; font-weight: 800; color: #003366; margin-top: 4px;">0 / 0</div>
+            </div>
+            <div style="background: #fff; border: 1px solid #e2e8f0; border-left: 5px solid #28a745; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 11px; font-weight: 700; color: #718096; text-transform: uppercase;">Total Matched Rows</div>
+                <div id="ibcKpiMatch" style="font-size: 22px; font-weight: 800; color: #28a745; margin-top: 4px;">0</div>
+            </div>
+            <div style="background: #fff; border: 1px solid #e2e8f0; border-left: 5px solid #dc3545; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 11px; font-weight: 700; color: #718096; text-transform: uppercase;">Total Mismatched Rows</div>
+                <div id="ibcKpiMismatch" style="font-size: 22px; font-weight: 800; color: #dc3545; margin-top: 4px;">0</div>
+            </div>
+            <div style="background: #fff; border: 1px solid #e2e8f0; border-left: 5px solid #17a2b8; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 11px; font-weight: 700; color: #718096; text-transform: uppercase;">Approved 25.4 Exceptions</div>
+                <div id="ibcKpiExceptions" style="font-size: 22px; font-weight: 800; color: #17a2b8; margin-top: 4px;">0</div>
+            </div>
+            <div style="background: #fff; border: 1px solid #e2e8f0; border-left: 5px solid #6f42c1; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 11px; font-weight: 700; color: #718096; text-transform: uppercase;">Total Rows Validated</div>
+                <div id="ibcKpiTotalRows" style="font-size: 22px; font-weight: 800; color: #6f42c1; margin-top: 4px;">0</div>
+            </div>
+        </div>
+
+        <!-- Visual Charts Row -->
+        <div style="display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px; margin-bottom: 20px;">
+            <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px;">
+                <div style="font-size: 13px; font-weight: 700; color: #2d3748; margin-bottom: 8px;">Overall Validation Breakdown</div>
+                <div style="height: 210px;"><canvas id="ibcOverallChart"></canvas></div>
+            </div>
+            <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px;">
+                <div style="font-size: 13px; font-weight: 700; color: #2d3748; margin-bottom: 8px;">Match vs. Mismatch by CC&B Table</div>
+                <div style="height: 210px;"><canvas id="ibcTableBarChart"></canvas></div>
+            </div>
+        </div>
+
+        <!-- E-Commerce Faceted Filter Bar -->
+        <div style="background: #f8fafc; border: 1px solid #cbd5e0; border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+                <div style="display: flex; gap: 10px; align-items: center; flex: 1;">
+                    <input type="text" id="ibcSearchInput" placeholder="🔍 Search Bill ID, BSEG ID, SA_ID..." oninput="renderIbcTables()" style="width: 260px; padding: 7px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;" />
+                    <select id="ibcRateFilter" onchange="renderIbcTables()" style="padding: 7px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;">
+                        <option value="ALL">All Rate Schedules</option>
+                    </select>
+                    <select id="ibcStatusFacet" onchange="renderIbcTables()" style="padding: 7px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;">
+                        <option value="ALL">All Validation Statuses</option>
+                        <option value="MISMATCH_ONLY">Has Mismatches (mismatch > 0)</option>
+                        <option value="MATCH_ONLY">100% Matched Only (mismatch == 0)</option>
+                    </select>
+                </div>
+                <!-- Active Hash Breadcrumb Pill -->
+                <div id="ibcHashFilterBadge" style="display: none; background: #003366; color: #fff; padding: 5px 12px; border-radius: 16px; font-size: 12px; font-weight: 600; cursor: pointer;" onclick="clearIbcBillHashFilter()">
+                    🔗 Filtered by Bill Pair <span id="ibcHashFilterText"></span> ✕
+                </div>
+            </div>
+        </div>
+
+        <!-- View Tabs (Bill Level vs BSEG Level vs Discovered IBC_Input) -->
+        <div style="display: flex; gap: 8px; border-bottom: 2px solid #cbd5e0; margin-bottom: 14px;">
+            <button type="button" id="tabBtnBillLevel" onclick="switchIbcTableTab('bill')" style="padding: 9px 18px; border: none; border-radius: 6px 6px 0 0; font-weight: 700; cursor: pointer; background: #007bff; color: #fff;">
+                📋 Output Front End - Bill Level
+            </button>
+            <button type="button" id="tabBtnBsegLevel" onclick="switchIbcTableTab('bseg')" style="padding: 9px 18px; border: none; border-radius: 6px 6px 0 0; font-weight: 700; cursor: pointer; background: #e2e8f0; color: #2d3748;">
+                🧩 Output Front End - BSEG Level
+            </button>
+            <button type="button" id="tabBtnIbcInput" onclick="switchIbcTableTab('input')" style="padding: 9px 18px; border: none; border-radius: 6px 6px 0 0; font-weight: 700; cursor: pointer; background: #e2e8f0; color: #2d3748;">
+                🗂️ Discovered IBC_Input (SA_ID & BSEG Pairs)
+            </button>
+        </div>
+
+        <!-- TAB 1: FRONT END BILL LEVEL TABLE -->
+        <div id="ibcBillTableContainer" style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; border: 1px solid #e2e8f0;">
+                <thead>
+                    <tr style="background: #003366; color: #fff; text-align: left;">
+                        <th style="padding: 10px;">New Bill id</th>
+                        <th style="padding: 10px;">cancelled Bill ID</th>
+                        <th style="padding: 10px; text-align: center;">BSEGs Paired</th>
+                        <th style="padding: 10px; text-align: right;">Total Row Validated (match)</th>
+                        <th style="padding: 10px; text-align: right;">Total Row Validated (mismatch)</th>
+                        <th style="padding: 10px; text-align: right;">Total Row Validated (total)</th>
+                        <th style="padding: 10px; text-align: center;">Download Bill Report</th>
+                        <th style="padding: 10px; text-align: center;">Drill-Down</th>
+                    </tr>
+                </thead>
+                <tbody id="ibcBillTableBody"></tbody>
+            </table>
+        </div>
+
+        <!-- TAB 2: FRONT END BSEG LEVEL TABLE -->
+        <div id="ibcBsegTableContainer" style="display: none; overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; border: 1px solid #e2e8f0;">
+                <thead>
+                    <tr style="background: #003366; color: #fff; text-align: left;">
+                        <th style="padding: 9px;">New Bill id</th>
+                        <th style="padding: 9px;">cancelled Bill ID</th>
+                        <th style="padding: 9px;">SA_ID</th>
+                        <th style="padding: 9px;">New_bseg</th>
+                        <th style="padding: 9px;">old_bseg</th>
+                        <th style="padding: 9px;">Rate_cd</th>
+                        <th style="padding: 9px; text-align: center;">MSG (M/MM)</th>
+                        <th style="padding: 9px; text-align: center;">CALC (M/MM)</th>
+                        <th style="padding: 9px; text-align: center;">READ (M/MM)</th>
+                        <th style="padding: 9px; text-align: center;">SQ (M/MM)</th>
+                        <th style="padding: 9px; text-align: center;">CALC_LN (M/MM)</th>
+                        <th style="padding: 9px; text-align: right;">Total Match</th>
+                        <th style="padding: 9px; text-align: right;">Total Mismatch</th>
+                        <th style="padding: 9px; text-align: center;">Download</th>
+                        <th style="padding: 9px; text-align: center;">Inspect</th>
+                    </tr>
+                </thead>
+                <tbody id="ibcBsegTableBody"></tbody>
+            </table>
+        </div>
+
+        <!-- TAB 3: DISCOVERED IBC_INPUT TABLE -->
+        <div id="ibcInputTableContainer" style="display: none; overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; border: 1px solid #e2e8f0;">
+                <thead>
+                    <tr style="background: #003366; color: #fff; text-align: left;">
+                        <th style="padding: 10px;">New Bill id</th>
+                        <th style="padding: 10px;">cancelled Bill ID</th>
+                        <th style="padding: 10px;">SA_ID (10-digit)</th>
+                        <th style="padding: 10px;">New_bseg (12-digit)</th>
+                        <th style="padding: 10px;">old_bseg (12-digit)</th>
+                        <th style="padding: 10px;">Rate_cd</th>
+                    </tr>
+                </thead>
+                <tbody id="ibcInputTableBody"></tbody>
+            </table>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- LIVE SIDE-BY-SIDE TABLE DRILLDOWN INSPECTOR                    -->
+        <!-- ============================================================== -->
+        <div id="ibcDrilldownInspector" style="display: none; margin-top: 24px; border: 2px solid #003366; border-radius: 8px; background: #fff; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
+                <div style="font-weight: 800; color: #003366; font-size: 15px;">
+                    🔍 Side-by-Side Table Inspector: <span id="ibcInspectorTitle" style="color: #007bff;"></span>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <select id="ibcInspectorStatusFilter" onchange="renderInspectorActiveSheet()" style="padding: 5px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 12px;">
+                        <option value="ALL">Show All Rows</option>
+                        <option value="mismatch">Mismatches Only</option>
+                        <option value="match">Matches Only</option>
+                    </select>
+                    <button type="button" onclick="document.getElementById('ibcDrilldownInspector').style.display='none'" style="background: #dc3545; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                        Close ✕
+                    </button>
+                </div>
+            </div>
+            <!-- Sheet Tabs inside Inspector (CI_BSEG_MSG, CI_BSEG_CALC, READ, SQ, CALC_LN) -->
+            <div id="ibcInspectorTabs" style="display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;"></div>
+            <!-- Side-by-Side Table Output -->
+            <div id="ibcInspectorSheetBody" style="overflow-x: auto; max-height: 440px;"></div>
+        </div>
+    </div>
+</div>
