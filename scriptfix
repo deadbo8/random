@@ -1,0 +1,104 @@
+function renderIbcCharts(kpis, tableStats) {
+        // 1. Interactive Hover Doughnut Chart
+        const box1 = document.getElementById("ibcOverallChartBox");
+        const matched = kpis.matched_rows || 0;
+        const mismatched = kpis.mismatched_rows || 0;
+        const exc = kpis.approved_exceptions || 0;
+        const total = Math.max(matched + mismatched + exc, 1);
+
+        const r = 58, cx = 85, cy = 90, circ = 2 * Math.PI * r;
+        const mLen = (matched / total) * circ;
+        const mmLen = (mismatched / total) * circ;
+        const exLen = (exc / total) * circ;
+
+        const mPct = ((matched / total) * 100).toFixed(1);
+        const mmPct = ((mismatched / total) * 100).toFixed(1);
+        const exPct = ((exc / total) * 100).toFixed(1);
+
+        box1.innerHTML = `
+            <svg viewBox="0 0 320 180" width="100%" height="180">
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#edf2f7" stroke-width="24"/>
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#16a34a" stroke-width="24"
+                    stroke-dasharray="${mLen} ${circ}" stroke-dashoffset="0" transform="rotate(-90 ${cx} ${cy})"
+                    style="cursor:pointer; transition: stroke-width 0.15s;"
+                    onmouseover="this.setAttribute('stroke-width','28'); showIbcTooltip(event, '🟢 <b>Matched Rows</b><br>Count: ${matched.toLocaleString()}<br>Share: ${mPct}%')"
+                    onmousemove="showIbcTooltip(event, '🟢 <b>Matched Rows</b><br>Count: ${matched.toLocaleString()}<br>Share: ${mPct}%')"
+                    onmouseout="this.setAttribute('stroke-width','24'); hideIbcTooltip()"/>
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dc2626" stroke-width="24"
+                    stroke-dasharray="${mmLen} ${circ}" stroke-dashoffset="${-mLen}" transform="rotate(-90 ${cx} ${cy})"
+                    style="cursor:pointer; transition: stroke-width 0.15s;"
+                    onmouseover="this.setAttribute('stroke-width','28'); showIbcTooltip(event, '🔴 <b>Mismatched Rows</b><br>Count: ${mismatched.toLocaleString()}<br>Share: ${mmPct}%')"
+                    onmousemove="showIbcTooltip(event, '🔴 <b>Mismatched Rows</b><br>Count: ${mismatched.toLocaleString()}<br>Share: ${mmPct}%')"
+                    onmouseout="this.setAttribute('stroke-width','24'); hideIbcTooltip()"/>
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#0284c7" stroke-width="24"
+                    stroke-dasharray="${exLen} ${circ}" stroke-dashoffset="${-(mLen + mmLen)}" transform="rotate(-90 ${cx} ${cy})"
+                    style="cursor:pointer; transition: stroke-width 0.15s;"
+                    onmouseover="this.setAttribute('stroke-width','28'); showIbcTooltip(event, '🔵 <b>25.4 Exceptions</b><br>Count: ${exc.toLocaleString()}<br>Share: ${exPct}%')"
+                    onmousemove="showIbcTooltip(event, '🔵 <b>25.4 Exceptions</b><br>Count: ${exc.toLocaleString()}<br>Share: ${exPct}%')"
+                    onmouseout="this.setAttribute('stroke-width','24'); hideIbcTooltip()"/>
+                <text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="15" font-weight="bold" fill="#003366">${mPct}%</text>
+                <text x="${cx}" y="${cy + 13}" text-anchor="middle" font-size="9.5" fill="#64748b">Pass Rate</text>
+                <rect x="170" y="48" width="10" height="10" rx="2" fill="#16a34a"/><text x="186" y="57" font-size="11" font-weight="600" fill="#1e293b">Matched (${matched})</text>
+                <rect x="170" y="76" width="10" height="10" rx="2" fill="#dc2626"/><text x="186" y="85" font-size="11" font-weight="600" fill="#1e293b">Mismatch (${mismatched})</text>
+                <rect x="170" y="104" width="10" height="10" rx="2" fill="#0284c7"/><text x="186" y="113" font-size="11" font-weight="600" fill="#1e293b">25.4 Exc (${exc})</text>
+            </svg>
+        `;
+
+        // 2. Interactive Hover Bar Chart
+        const box2 = document.getElementById("ibcTableBarChartBox");
+        const tbls = Object.keys(tableStats);
+        const maxVal = Math.max(...tbls.map(t => Math.max(tableStats[t].match, tableStats[t].mismatch)), 1);
+        const baseY = 148, chartH = 118, colW = 440 / Math.max(tbls.length, 1);
+
+        let barsHtml = "";
+        tbls.forEach((t, i) => {
+            const shortName = t.replace("CI_", "");
+            const m = tableStats[t].match || 0;
+            const mm = tableStats[t].mismatch || 0;
+            const tot = m + mm;
+            const passPct = tot > 0 ? ((m / tot) * 100).toFixed(1) : "100.0";
+            const hm = (m / maxVal) * chartH;
+            const hmm = (mm / maxVal) * chartH;
+            const xc = 30 + i * colW + colW / 2;
+            const bw = 15;
+
+            const tipM = `<b>${t}</b><br>🟢 Matched: ${m} rows (${passPct}%)<br>Total in table: ${tot}`;
+            const tipMM = `<b>${t}</b><br>🔴 Mismatch: ${mm} rows<br>Total in table: ${tot}`;
+
+            barsHtml += `
+                <rect x="${xc - bw - 1}" y="${baseY - hm}" width="${bw}" height="${Math.max(hm, 2)}" rx="2" fill="#16a34a" style="cursor:pointer;"
+                    onmouseover="this.setAttribute('opacity','0.8'); showIbcTooltip(event, '${tipM}')"
+                    onmousemove="showIbcTooltip(event, '${tipM}')"
+                    onmouseout="this.setAttribute('opacity','1'); hideIbcTooltip()"/>
+                ${m > 0 ? `<text x="${xc - bw/2 - 1}" y="${baseY - hm - 4}" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#15803d">${m}</text>` : ''}
+                <rect x="${xc + 1}" y="${baseY - hmm}" width="${bw}" height="${Math.max(hmm, 2)}" rx="2" fill="#dc2626" style="cursor:pointer;"
+                    onmouseover="this.setAttribute('opacity','0.8'); showIbcTooltip(event, '${tipMM}')"
+                    onmousemove="showIbcTooltip(event, '${tipMM}')"
+                    onmouseout="this.setAttribute('opacity','1'); hideIbcTooltip()"/>
+                ${mm > 0 ? `<text x="${xc + bw/2 + 1}" y="${baseY - hmm - 4}" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#dc2626">${mm}</text>` : ''}
+                <text x="${xc}" y="${baseY + 15}" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#334155">${shortName}</text>
+            `;
+        });
+
+        box2.innerHTML = `
+            <svg viewBox="0 0 485 180" width="100%" height="180">
+                <line x1="20" y1="${baseY}" x2="470" y2="${baseY}" stroke="#cbd5e0" stroke-width="1.5"/>
+                <rect x="340" y="4" width="9" height="9" rx="2" fill="#16a34a"/><text x="353" y="12" font-size="9.5" font-weight="bold" fill="#334155">Match</text>
+                <rect x="395" y="4" width="9" height="9" rx="2" fill="#dc2626"/><text x="408" y="12" font-size="9.5" font-weight="bold" fill="#334155">Mismatch</text>
+                ${barsHtml}
+            </svg>
+        `;
+    }
+
+    function resetIbcFilters() {
+        document.getElementById("ibcSearchInput").value = "";
+        document.getElementById("ibcRateFilter").value = "ALL";
+        document.getElementById("ibcStatusFacet").value = "ALL";
+        _ibcActiveBillHash = "ALL";
+        document.getElementById("ibcHashFilterBadge").style.display = "none";
+        renderIbcTables();
+    }
+
+    window.showIbcTooltip = showIbcTooltip;
+    window.hideIbcTooltip = hideIbcTooltip;
+    window.resetIbcFilters = resetIbcFilters;
