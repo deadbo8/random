@@ -1,92 +1,66 @@
-function initIbcDashboard(data) {
-        const dash = document.getElementById("ibcDashboardArea");
-        if (dash) dash.style.display = "block";
-        const insp = document.getElementById("ibcDrilldownInspector");
-        if (insp) insp.style.display = "none";
+let _ibcCachedTableStats = {};
+    let _ibcCachedExcCount = 0;
+    let _ibcChartScope = "all";
 
-        const mBtn = document.getElementById("ibcMasterDownloadBtn");
-        if (mBtn) mBtn.href = data.master_download_url || "#";
-        const zBtn = document.getElementById("ibcZipDownloadBtn");
-        if (zBtn) zBtn.href = data.zip_download_url || "#";
-        const wBtn = document.getElementById("ibcWordDownloadBtn");
-        if (wBtn) wBtn.href = data.word_download_url || "#";
-
-        const bsegs = data.bseg_summary || [];
-        const bills = data.bill_summary || [];
-
-        // Compute KPIs directly from summary rows so it never shows 0/0
-        let k = Array.isArray(data.kpis) ? (data.kpis[0] || {}) : (data.kpis || {});
-        const totalBills = k.total_bills || bills.length || 1;
-        const totalBsegs = k.total_bsegs || bsegs.length || 0;
-        const matchedRows = k.matched_rows !== undefined ? k.matched_rows : (
-            bills.length ? bills.reduce((a, r) => a + (r.Total_row_validated_match || 0), 0)
-                         : bsegs.reduce((a, r) => a + (r.Total_row_validated_match || 0), 0)
-        );
-        const mismatchedRows = k.mismatched_rows !== undefined ? k.mismatched_rows : (
-            bills.length ? bills.reduce((a, r) => a + (r.Total_row_validated_mismatch || 0), 0)
-                         : bsegs.reduce((a, r) => a + (r.Total_row_validated_mismatch || 0), 0)
-        );
-        const excRows = k.approved_exceptions || bsegs.reduce((a, r) => a + (r.exceptions_count || 0), 0);
-
-        const elPairs = document.getElementById("ibcKpiPairs");
-        if (elPairs) elPairs.textContent = `${totalBills} / ${totalBsegs}`;
-        const elMatch = document.getElementById("ibcKpiMatch");
-        if (elMatch) elMatch.textContent = matchedRows.toLocaleString();
-        const elMism = document.getElementById("ibcKpiMismatch");
-        if (elMism) elMism.textContent = mismatchedRows.toLocaleString();
-        const elExc = document.getElementById("ibcKpiExceptions");
-        if (elExc) elExc.textContent = excRows.toLocaleString();
-
-        // Populate Rate Schedule Dropdown
-        const rateSelect = document.getElementById("ibcRateFilter");
-        if (rateSelect) {
-            const uniqueRates = Array.from(new Set(bsegs.map(r => r.Rate_cd).filter(Boolean))).sort();
-            rateSelect.innerHTML = `<option value="ALL">All Rates (${uniqueRates.length})</option>` +
-                uniqueRates.map(r => `<option value="${r}">${r}</option>`).join("");
+    function showIbcTooltip(evt, htmlText) {
+        let tt = document.getElementById("ibcChartTooltip");
+        if (!tt) {
+            tt = document.createElement("div");
+            tt.id = "ibcChartTooltip";
+            tt.style.cssText = "display:none; position:fixed; pointer-events:none; background:rgba(15,23,42,0.95); color:#fff; padding:8px 12px; border-radius:6px; font-size:12px; font-weight:600; z-index:999999; box-shadow:0 4px 12px rgba(0,0,0,0.25); line-height:1.4; text-align:left;";
+            document.body.appendChild(tt);
         }
+        tt.innerHTML = htmlText;
+        tt.style.display = "block";
+        tt.style.left = (evt.clientX + 14) + "px";
+        tt.style.top = (evt.clientY - 32) + "px";
+    }
 
-        // Compute Table Stats from summary rows if not directly in payload
-        let tStats = data.table_chart_stats || {};
-        if (Object.keys(tStats).length === 0) {
-            if (data.scope !== "bseg_only" && bills.length) {
-                tStats["CI_BILL_MSGS"] = {
-                    match: bills.reduce((a, r) => a + (r.CI_BILL_MSGS_match || 0), 0),
-                    mismatch: bills.reduce((a, r) => a + (r.CI_BILL_MSGS_mismatch || 0), 0)
-                };
+    function hideIbcTooltip() {
+        const tt = document.getElementById("ibcChartTooltip");
+        if (tt) tt.style.display = "none";
+    }
+
+    function setIbcChartScope(scope) {
+        _ibcChartScope = scope;
+        ["all", "bill", "bseg"].forEach(s => {
+            const btn = document.getElementById(s === "all" ? "chartBtnAll" : (s === "bill" ? "chartBtnBill" : "chartBtnBseg"));
+            if (btn) {
+                btn.style.background = s === scope ? "#007bff" : "#f8fafc";
+                btn.style.color = s === scope ? "#fff" : "#334155";
             }
-            ["CI_BSEG_MSG", "CI_BSEG_CALC", "CI_BSEG_READ", "CI_BSEG_SQ", "CI_BSEG_CALC_LN"].forEach(t => {
-                tStats[t] = {
-                    match: bsegs.reduce((a, r) => a + (r[`${t}_match`] || 0), 0),
-                    mismatch: bsegs.reduce((a, r) => a + (r[`${t}_mismatch`] || 0), 0)
-                };
-            });
+        });
+        const lbl = document.getElementById("ibcChartScopeLabel");
+        if (lbl) {
+            lbl.textContent = scope === "all" ? "(All Tables)" : (scope === "bill" ? "(Bill Tables Only)" : "(BSEG Tables Only)");
         }
-
-        renderIbcCharts(
-            { matched_rows: matchedRows, mismatched_rows: mismatchedRows, approved_exceptions: excRows },
-            tStats
-        );
-
-        const billTabBtn = document.getElementById("tabBtnBillLevel");
-        if (data.scope === "bseg_only") {
-            if (billTabBtn) billTabBtn.style.display = "none";
-            switchIbcTableTab("bseg");
-        } else {
-            if (billTabBtn) billTabBtn.style.display = "inline-block";
-            switchIbcTableTab("bill");
-        }
-
-        renderIbcTables();
+        drawIbcChartsByScope();
     }
 
     function renderIbcCharts(kpis, tableStats) {
+        _ibcCachedTableStats = tableStats || {};
+        _ibcCachedExcCount = kpis.approved_exceptions || 0;
+        setIbcChartScope("all");
+    }
+
+    function drawIbcChartsByScope() {
         const box1 = document.getElementById("ibcOverallChartBox");
         const box2 = document.getElementById("ibcTableBarChartBox");
         if (!box1 || !box2) return;
 
-        const matched = kpis.matched_rows || 0;
-        const mismatched = kpis.mismatched_rows || 0;
-        const exc = kpis.approved_exceptions || 0;
+        const allTbls = Object.keys(_ibcCachedTableStats);
+        const filteredTbls = allTbls.filter(t => {
+            if (_ibcChartScope === "bill") return t.startsWith("CI_BILL");
+            if (_ibcChartScope === "bseg") return t.startsWith("CI_BSEG");
+            return true;
+        });
+
+        let matched = 0, mismatched = 0;
+        filteredTbls.forEach(t => {
+            matched += (_ibcCachedTableStats[t].match || 0);
+            mismatched += (_ibcCachedTableStats[t].mismatch || 0);
+        });
+        const exc = _ibcChartScope === "bill" ? 0 : _ibcCachedExcCount;
         const total = Math.max(matched + mismatched + exc, 1);
 
         const r = 56, cx = 80, cy = 88, circ = 2 * Math.PI * r;
@@ -94,9 +68,9 @@ function initIbcDashboard(data) {
         const mmLen = (mismatched / total) * circ;
         const exLen = (exc / total) * circ;
 
-        const mPct = ((matched / total) * 100).toFixed(1);
-        const mmPct = ((mismatched / total) * 100).toFixed(1);
-        const exPct = ((exc / total) * 100).toFixed(1);
+        const mPct = ((matched + mismatched + exc) > 0 ? (matched / total) * 100 : 0).toFixed(1);
+        const mmPct = ((matched + mismatched + exc) > 0 ? (mismatched / total) * 100 : 0).toFixed(1);
+        const exPct = ((matched + mismatched + exc) > 0 ? (exc / total) * 100 : 0).toFixed(1);
 
         box1.innerHTML = `
             <svg viewBox="0 0 310 175" width="100%" height="175">
@@ -127,37 +101,37 @@ function initIbcDashboard(data) {
             </svg>
         `;
 
-        const tbls = Object.keys(tableStats);
-        const maxVal = Math.max(...tbls.map(t => Math.max(tableStats[t].match || 0, tableStats[t].mismatch || 0)), 1);
-        const baseY = 145, chartH = 112, colW = 430 / Math.max(tbls.length, 1);
+        const maxVal = Math.max(...filteredTbls.map(t => Math.max(_ibcCachedTableStats[t].match || 0, _ibcCachedTableStats[t].mismatch || 0)), 1);
+        const baseY = 145, chartH = 112, colW = 430 / Math.max(filteredTbls.length, 1);
 
         let barsHtml = "";
-        tbls.forEach((t, i) => {
+        filteredTbls.forEach((t, i) => {
             const shortName = t.replace("CI_", "");
-            const m = tableStats[t].match || 0;
-            const mm = tableStats[t].mismatch || 0;
+            const m = _ibcCachedTableStats[t].match || 0;
+            const mm = _ibcCachedTableStats[t].mismatch || 0;
             const tot = m + mm;
-            const passPct = tot > 0 ? ((m / tot) * 100).toFixed(1) : "100.0";
+            const passPct = tot > 0 ? ((m / tot) * 100).toFixed(1) : "0.0";
+            const mmPctBar = tot > 0 ? ((mm / tot) * 100).toFixed(1) : "0.0";
             const hm = (m / maxVal) * chartH;
             const hmm = (mm / maxVal) * chartH;
             const xc = 25 + i * colW + colW / 2;
-            const bw = 14;
+            const bw = filteredTbls.length === 1 ? 28 : 14;
 
-            const tipM = `<b>${t}</b><br>🟢 Matched: ${m} rows (${passPct}%)<br>Total Rows: ${tot}`;
-            const tipMM = `<b>${t}</b><br>🔴 Mismatch: ${mm} rows<br>Total Rows: ${tot}`;
+            const tipM = `<b>${t}</b><br>🟢 Matched: ${m} rows (${passPct}%)<br>Total in table: ${tot}`;
+            const tipMM = `<b>${t}</b><br>🔴 Mismatch: ${mm} rows (${mmPctBar}%)<br>Total in table: ${tot}`;
 
             barsHtml += `
-                <rect x="${xc - bw - 1}" y="${baseY - hm}" width="${bw}" height="${Math.max(hm, 2)}" rx="2" fill="#16a34a" style="cursor:pointer;"
+                <rect x="${xc - bw - 1}" y="${baseY - hm}" width="${bw}" height="${Math.max(hm, 3)}" rx="2" fill="#16a34a" style="cursor:pointer;"
                     onmouseover="this.setAttribute('opacity','0.75'); showIbcTooltip(event, '${tipM}')"
                     onmousemove="showIbcTooltip(event, '${tipM}')"
                     onmouseout="this.setAttribute('opacity','1'); hideIbcTooltip()"/>
-                ${m > 0 ? `<text x="${xc - bw/2 - 1}" y="${baseY - hm - 3}" text-anchor="middle" font-size="8" font-weight="bold" fill="#15803d">${m}</text>` : ''}
-                <rect x="${xc + 1}" y="${baseY - hmm}" width="${bw}" height="${Math.max(hmm, 2)}" rx="2" fill="#dc2626" style="cursor:pointer;"
+                ${m > 0 ? `<text x="${xc - bw/2 - 1}" y="${baseY - hm - 3}" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#15803d">${m}</text>` : ''}
+                <rect x="${xc + 1}" y="${baseY - hmm}" width="${bw}" height="${Math.max(hmm, 3)}" rx="2" fill="#dc2626" style="cursor:pointer;"
                     onmouseover="this.setAttribute('opacity','0.75'); showIbcTooltip(event, '${tipMM}')"
                     onmousemove="showIbcTooltip(event, '${tipMM}')"
                     onmouseout="this.setAttribute('opacity','1'); hideIbcTooltip()"/>
-                ${mm > 0 ? `<text x="${xc + bw/2 + 1}" y="${baseY - hmm - 3}" text-anchor="middle" font-size="8" font-weight="bold" fill="#dc2626">${mm}</text>` : ''}
-                <text x="${xc}" y="${baseY + 14}" text-anchor="middle" font-size="8" font-weight="bold" fill="#334155">${shortName}</text>
+                ${mm > 0 ? `<text x="${xc + bw/2 + 1}" y="${baseY - hmm - 3}" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#dc2626">${mm}</text>` : ''}
+                <text x="${xc}" y="${baseY + 14}" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#334155">${shortName}</text>
             `;
         });
 
@@ -170,3 +144,17 @@ function initIbcDashboard(data) {
             </svg>
         `;
     }
+
+    function resetIbcFilters() {
+        document.getElementById("ibcSearchInput").value = "";
+        document.getElementById("ibcRateFilter").value = "ALL";
+        document.getElementById("ibcStatusFacet").value = "ALL";
+        _ibcActiveBillHash = "ALL";
+        document.getElementById("ibcHashFilterBadge").style.display = "none";
+        renderIbcTables();
+    }
+
+    window.showIbcTooltip = showIbcTooltip;
+    window.hideIbcTooltip = hideIbcTooltip;
+    window.setIbcChartScope = setIbcChartScope;
+    window.resetIbcFilters = resetIbcFilters;
