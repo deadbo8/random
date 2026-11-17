@@ -1,14 +1,124 @@
-<!-- Table Filter Ribbons (Live Filter for Summary, Charts & All Report Downloads) -->
-        <div style="background: #f8fafc; border: 1px solid #cbd5e0; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-size: 12.5px; font-weight: 700; color: #1e293b;">
-                    Table Filter Ribbons (Updates Final Summary & All Report Downloads):
-                </span>
-                <div style="font-size: 12px; display: flex; gap: 10px;">
-                    <a href="javascript:void(0)" onclick="toggleAllIbcRibbons(true)" style="color: #007bff; font-weight: 600; text-decoration: none;">Select All</a>
-                    <span style="color: #cbd5e0;">|</span>
-                    <a href="javascript:void(0)" onclick="toggleAllIbcRibbons(false)" style="color: #64748b; font-weight: 600; text-decoration: none;">Clear All</a>
-                </div>
-            </div>
-            <div id="ibcTableRibbonsContainer" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
-        </div>
+let _ibcAllJobTables = [];
+    let _ibcSelectedTables = new Set();
+
+    function renderIbcTableRibbons() {
+        const container = document.getElementById("ibcTableRibbonsContainer");
+        if (!container) return;
+        container.innerHTML = _ibcAllJobTables.map(tbl => {
+            const isActive = _ibcSelectedTables.has(tbl);
+            const isBill = tbl.startsWith("CI_BILL");
+            const bg = isActive ? "#003366" : "#ffffff";
+            const color = isActive ? "#ffffff" : "#475569";
+            const border = isActive ? "#003366" : "#cbd5e0";
+            return `
+                <button type="button" onclick="toggleIbcRibbon('${tbl}')"
+                    style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 20px; border: 1.5px solid ${border}; background: ${bg}; color: ${color}; font-size: 11.5px; font-weight: 600; cursor: pointer;">
+                    <span>${isActive ? "✓" : "+"}</span>
+                    <span>${tbl}</span>
+                    <span style="font-size: 9px; padding: 1px 5px; border-radius: 8px; background: ${isActive ? 'rgba(255,255,255,0.2)' : '#e2e8f0'}; color: ${isActive ? '#fff' : '#475569'};">${isBill ? "BILL" : "BSEG"}</span>
+                </button>
+            `;
+        }).join("");
+    }
+
+    function toggleIbcRibbon(tbl) {
+        if (_ibcSelectedTables.has(tbl)) {
+            if (_ibcSelectedTables.size <= 1) {
+                alert("At least 1 table must remain selected.");
+                return;
+            }
+            _ibcSelectedTables.delete(tbl);
+        } else {
+            _ibcSelectedTables.add(tbl);
+        }
+        renderIbcTableRibbons();
+        applyIbcRibbonFilterToDashboard();
+    }
+
+    function toggleAllIbcRibbons(selectAll) {
+        if (selectAll) {
+            _ibcSelectedTables = new Set(_ibcAllJobTables);
+        } else {
+            _ibcSelectedTables = new Set([_ibcAllJobTables[0]]);
+        }
+        renderIbcTableRibbons();
+        applyIbcRibbonFilterToDashboard();
+    }
+
+    function getIbcTablesQueryParam() {
+        if (_ibcSelectedTables.size === _ibcAllJobTables.length) return "";
+        return `?tables=${encodeURIComponent(Array.from(_ibcSelectedTables).join(","))}`;
+    }
+
+    function applyIbcRibbonFilterToDashboard() {
+        if (!_ibcJobData) return;
+        const activeTables = Array.from(_ibcSelectedTables);
+        const activeBillTbls = activeTables.filter(t => t.startsWith("CI_BILL"));
+        const activeBsegTbls = activeTables.filter(t => t.startsWith("CI_BSEG"));
+        const qParam = getIbcTablesQueryParam();
+
+        // 1. Update 3 Top Download Links with ?tables=...
+        const setHref = (id, baseUrl) => {
+            const el = document.getElementById(id);
+            if (el && baseUrl) el.href = baseUrl + qParam;
+        };
+        setHref("ibcMasterDownloadBtn", _ibcJobData.master_download_url);
+        setHref("ibcZipDownloadBtn", _ibcJobData.zip_download_url);
+        setHref("ibcWordDownloadBtn", _ibcJobData.word_download_url);
+
+        // 2. Recompute Filtered BSEG & Bill Totals in Memory
+        let totMatch = 0, totMismatch = 0, totExc = 0;
+        const filteredTStats = {};
+        activeTables.forEach(t => { filteredTStats[t] = { match: 0, mismatch: 0 }; });
+
+        (_ibcJobData.bseg_summary || []).forEach(b => {
+            let bM = 0, bMM = 0;
+            activeBsegTbls.forEach(t => {
+                const m = b[`${t}_match`] || 0;
+                const mm = b[`${t}_mismatch`] || 0;
+                bM += m; bMM += mm;
+                filteredTStats[t].match += m;
+                filteredTStats[t].mismatch += mm;
+            });
+            b._filtered_match = bM;
+            b._filtered_mismatch = bMM;
+            totMatch += bM;
+            totMismatch += bMM;
+            if (activeBsegTbls.includes("CI_BSEG_CALC_LN")) totExc += (b.exceptions_count || 0);
+        });
+
+        (_ibcJobData.bill_summary || []).forEach(bi => {
+            let billM = 0, billMM = 0;
+            activeBillTbls.forEach(t => {
+                const m = bi[`${t}_match`] || 0;
+                const mm = bi[`${t}_mismatch`] || 0;
+                billM += m; billMM += mm;
+                filteredTStats[t].match += m;
+                filteredTStats[t].mismatch += mm;
+            });
+            const kids = (_ibcJobData.bseg_summary || []).filter(b => b.bill_pair_hash === bi.bill_pair_hash);
+            const kidM = kids.reduce((a, x) => a + x._filtered_match, 0);
+            const kidMM = kids.reduce((a, x) => a + x._filtered_mismatch, 0);
+            bi._filtered_match = billM + kidM;
+            bi._filtered_mismatch = billMM + kidMM;
+            bi._filtered_total = bi._filtered_match + bi._filtered_mismatch;
+            totMatch += billM;
+            totMismatch += billMM;
+        });
+
+        // 3. Update 5 KPI Cards
+        const billsCnt = (_ibcJobData.bill_summary || []).length || 1;
+        const bsegsCnt = (_ibcJobData.bseg_summary || []).length || 0;
+        document.getElementById("ibcKpiPairs").textContent = `${billsCnt} / ${bsegsCnt}`;
+        document.getElementById("ibcKpiTotalRows").textContent = (totMatch + totMismatch).toLocaleString();
+        document.getElementById("ibcKpiMatch").textContent = totMatch.toLocaleString();
+        document.getElementById("ibcKpiMismatch").textContent = totMismatch.toLocaleString();
+        document.getElementById("ibcKpiExceptions").textContent = totExc.toLocaleString();
+
+        // 4. Redraw Charts & Summary Tables
+        renderIbcCharts({ matched_rows: totMatch, mismatched_rows: totMismatch, approved_exceptions: totExc }, filteredTStats);
+        renderIbcTables();
+    }
+
+    window.toggleIbcRibbon = toggleIbcRibbon;
+    window.toggleAllIbcRibbons = toggleAllIbcRibbons;
