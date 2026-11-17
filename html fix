@@ -1,94 +1,32 @@
-def filter_results_by_tables(self, raw_results: dict, selected_tables: list[str]) -> tuple[dict, dict, dict]:
-        """Filters already-fetched comparison results in memory for selected table ribbons (Zero DB queries)."""
-        sel_set = set(selected_tables)
-        scope = raw_results.get("scope", self.scope)
-        active_bill = [t for t in BILL_TABLE_REGISTRY.keys() if scope == "bill_and_bseg" and t in sel_set]
-        active_bseg = [t for t in BSEG_TABLE_REGISTRY.keys() if t in sel_set]
+def generate_single_bseg_excel(self, bseg_key: str, tabs_dict: dict, table_columns: dict, out_path: str):
+    wb_bs = openpyxl.Workbook()
+    first = True
+    n_id, o_id = bseg_key.split("vs")
+    for tab_name, rows in tabs_dict.items():
+        ws = wb_bs.active if first else wb_bs.create_sheet(title=tab_name)
+        ws.title = tab_name
+        first = False
+        self._write_side_by_side_sheet(ws, n_id, o_id, rows, table_columns.get(tab_name, []))
+    self._style_and_autofit(wb_bs)
+    wb_bs.save(out_path)
 
-        # 1. Recompute BSEG summary rows for selected BSEG tables only
-        f_bseg_summary = []
-        total_exc = 0
-        for b in raw_results.get("bseg_summary", []):
-            tot_m = sum(b.get(f"{t}_match", 0) for t in active_bseg)
-            tot_mm = sum(b.get(f"{t}_mismatch", 0) for t in active_bseg)
-            exc = b.get("exceptions_count", 0) if "CI_BSEG_CALC_LN" in active_bseg else 0
-            total_exc += exc
-            nb = dict(b)
-            nb["Total_row_validated_match"] = tot_m
-            nb["Total_row_validated_mismatch"] = tot_mm
-            nb["Total_row_validated_total"] = tot_m + tot_mm
-            nb["exceptions_count"] = exc
-            f_bseg_summary.append(nb)
-
-        # 2. Recompute Bill summary rows for selected Bill + BSEG tables
-        f_bill_summary = []
-        if scope == "bill_and_bseg":
-            for bi in raw_results.get("bill_summary", []):
-                bill_m = sum(bi.get(f"{t}_match", 0) for t in active_bill)
-                bill_mm = sum(bi.get(f"{t}_mismatch", 0) for t in active_bill)
-                child_bsegs = [x for x in f_bseg_summary if x["bill_pair_hash"] == bi["bill_pair_hash"]]
-                bs_m = sum(x["Total_row_validated_match"] for x in child_bsegs)
-                bs_mm = sum(x["Total_row_validated_mismatch"] for x in child_bsegs)
-                nbi = dict(bi)
-                nbi["Total_Bill_row_validated_match"] = bill_m
-                nbi["Total_Bill_row_validated_mismatch"] = bill_mm
-                nbi["Total_Bseg_row_validated_match"] = bs_m
-                nbi["Total_Bseg_row_validated_mismatch"] = bs_mm
-                nbi["Total_row_validated_match"] = bill_m + bs_m
-                nbi["Total_row_validated_mismatch"] = bill_mm + bs_mm
-                nbi["Total_row_validated_total"] = bill_m + bs_m + bill_mm + bs_mm
-                f_bill_summary.append(nbi)
-
-        # 3. Filter drilldown sheets
-        f_bseg_drill = {
-            k: {t: rows for t, rows in tabs.items() if t in active_bseg}
-            for k, tabs in raw_results.get("bseg_drilldowns", {}).items()
-        }
-        f_bill_drill = {
-            k: {
-                **{t: rows for t, rows in tabs.items() if t in active_bill},
-                "child_bseg_keys": tabs.get("child_bseg_keys", [])
-            }
-            for k, tabs in raw_results.get("bill_drilldowns", {}).items()
-        }
-
-        filtered_res = {
-            "scope": scope,
-            "active_bill_tables": active_bill,
-            "active_bseg_tables": active_bseg,
-            "bseg_summary": f_bseg_summary,
-            "bill_summary": f_bill_summary,
-            "bseg_drilldowns": f_bseg_drill,
-            "bill_drilldowns": f_bill_drill,
-            "total_exceptions": total_exc,
-            "table_columns": raw_results.get("table_columns", {})
-        }
-
-        # 4. Recompute KPIs & Table Stats
-        tot_bseg_m = sum(r["Total_row_validated_match"] for r in f_bseg_summary)
-        tot_bseg_mm = sum(r["Total_row_validated_mismatch"] for r in f_bseg_summary)
-        tot_bill_m = sum(r.get("Total_Bill_row_validated_match", 0) for r in f_bill_summary)
-        tot_bill_mm = sum(r.get("Total_Bill_row_validated_mismatch", 0) for r in f_bill_summary)
-        grand_m = tot_bseg_m + tot_bill_m
-        grand_mm = tot_bseg_mm + tot_bill_mm
-
-        f_kpis = {
-            "total_bills": len({b["bill_pair_hash"] for b in f_bseg_summary}),
-            "total_bsegs": len(f_bseg_summary),
-            "matched_rows": grand_m,
-            "mismatched_rows": grand_mm,
-            "total_rows": grand_m + grand_mm,
-            "approved_exceptions": total_exc
-        }
-        f_tstats = {}
-        for tbl in active_bill:
-            f_tstats[tbl] = {
-                "match": sum(r.get(f"{tbl}_match", 0) for r in f_bill_summary),
-                "mismatch": sum(r.get(f"{tbl}_mismatch", 0) for r in f_bill_summary)
-            }
-        for tbl in active_bseg:
-            f_tstats[tbl] = {
-                "match": sum(r.get(f"{tbl}_match", 0) for r in f_bseg_summary),
-                "mismatch": sum(r.get(f"{tbl}_mismatch", 0) for r in f_bseg_summary)
-            }
-        return filtered_res, f_kpis, f_tstats
+def generate_single_bill_excel(self, bill_key: str, b_data: dict, results: dict, out_path: str):
+    wb_bi = openpyxl.Workbook()
+    first = True
+    raw_pair = bill_key.replace("bill_", "").split("vs")
+    n_b, o_b = raw_pair[0], raw_pair[1]
+    bill_tbl_names = results.get("active_bill_tables", list(BILL_TABLE_REGISTRY.keys()))
+    for tbl_name in bill_tbl_names:
+        ws = wb_bi.active if first else wb_bi.create_sheet(title=tbl_name)
+        ws.title = tbl_name
+        first = False
+        self._write_side_by_side_sheet(ws, n_b, o_b, b_data.get(tbl_name, []), results.get("table_columns", {}).get(tbl_name, []))
+    ws_bs_sum = wb_bi.create_sheet(title="BSEG_Summary")
+    ws_bs_sum.append(["SA_ID", "New_bseg", "old_bseg", "Rate_cd", "match", "mismatch"])
+    for ck in b_data.get("child_bseg_keys", []):
+        match_b = next((x for x in results["bseg_summary"] if x["download"] == ck), None)
+        if match_b:
+            ws_bs_sum.append([match_b["SA_ID"], match_b["New_bseg"], match_b["old_bseg"], match_b["Rate_cd"],
+                              match_b["Total_row_validated_match"], match_b["Total_row_validated_mismatch"]])
+    self._style_and_autofit(wb_bi)
+    wb_bi.save(out_path)
