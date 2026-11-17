@@ -1,73 +1,14 @@
-@ibc_bp.route("/api/ibc/download/<task_id>/<filename>", methods=["GET"])
-def download_ibc_report(task_id, filename):
-    """Serves full reports instantly, OR builds filtered reports in-memory for selected ?tables=..."""
-    import hashlib
-    base_dir = get_base_dir()
-    if not filename.endswith((".xlsx", ".zip", ".docx")):
-        filename = f"{filename}.xlsx"
-    safe_name = secure_filename(filename)
-
-    job = IBC_JOBS.get(task_id)
-    tables_param = (request.args.get("tables") or "").strip()
-
-    # If no table filter specified (all tables), serve the pre-built file directly
-    if not tables_param or not job or "raw_results" not in job:
-        file_path = os.path.join(base_dir, "output", f"ibc_run_{task_id}", safe_name)
-        if not os.path.exists(file_path):
-            return jsonify({"error": f"Report file '{safe_name}' not found."}), 404
-    else:
-        # Build & cache filtered report in a subfolder based on selected tables
-        sel_tables = [t.strip() for t in tables_param.split(",") if t.strip()]
-        tbl_hash = hashlib.md5(",".join(sorted(sel_tables)).encode()).hexdigest()[:6]
-        filt_dir = os.path.join(base_dir, "output", f"ibc_run_{task_id}", f"filt_{tbl_hash}")
-        os.makedirs(filt_dir, exist_ok=True)
-        file_path = os.path.join(filt_dir, safe_name)
-
-        if not os.path.exists(file_path):
-            engine = IBCEngine(env=job["env"], scope=job["scope"], skip_db=True)
-            f_res, f_kpis, f_tstats = engine.filter_results_by_tables(job["raw_results"], sel_tables)
-
-            if safe_name.endswith(".docx"):
-                f_charts = _generate_matplotlib_charts(f_kpis, f_tstats)
-                docx_out = engine.generate_executive_word_report(
-                    kpis=f_kpis, table_stats=f_tstats, results=f_res,
-                    charts_buf=f_charts, output_dir=filt_dir, task_id=task_id
-                )
-                file_path = docx_out
-            elif safe_name.startswith("IBC_Master_Report"):
-                master_out = engine.generate_all_reports(
-                    job["df_input"], job["df_ibc_input"], f_res, filt_dir, build_drilldowns=False
-                )
-                file_path = master_out
-            elif safe_name.endswith(".zip"):
-                engine.generate_all_reports(job["df_input"], job["df_ibc_input"], f_res, filt_dir, build_drilldowns=True)
-                f_charts = _generate_matplotlib_charts(f_kpis, f_tstats)
-                engine.generate_executive_word_report(
-                    kpis=f_kpis, table_stats=f_tstats, results=f_res,
-                    charts_buf=f_charts, output_dir=filt_dir, task_id=task_id
-                )
-                with zipfile.ZipFile(file_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for root, _, files in os.walk(filt_dir):
-                        for f in files:
-                            if f != safe_name and f.endswith((".xlsx", ".docx")):
-                                zf.write(os.path.join(root, f), arcname=f)
-            elif safe_name.startswith("bill_"):
-                b_key = safe_name.replace(".xlsx", "")
-                b_data = f_res["bill_drilldowns"].get(b_key)
-                if not b_data:
-                    return jsonify({"error": "Bill drilldown not found."}), 404
-                engine.generate_single_bill_excel(b_key, b_data, f_res, file_path)
-            else:
-                bs_key = safe_name.replace(".xlsx", "")
-                tabs_dict = f_res["bseg_drilldowns"].get(bs_key)
-                if not tabs_dict:
-                    return jsonify({"error": "BSEG drilldown not found."}), 404
-                engine.generate_single_bseg_excel(bs_key, tabs_dict, f_res.get("table_columns", {}), file_path)
-
-    if safe_name.endswith(".zip"):
-        mime = "application/zip"
-    elif safe_name.endswith(".docx"):
-        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    else:
-        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    return send_file(file_path, as_attachment=True, download_name=safe_name, mimetype=mime)
+<!-- Table Filter Ribbons (Live Filter for Summary, Charts & All Report Downloads) -->
+        <div style="background: #f8fafc; border: 1px solid #cbd5e0; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 12.5px; font-weight: 700; color: #1e293b;">
+                    Table Filter Ribbons (Updates Final Summary & All Report Downloads):
+                </span>
+                <div style="font-size: 12px; display: flex; gap: 10px;">
+                    <a href="javascript:void(0)" onclick="toggleAllIbcRibbons(true)" style="color: #007bff; font-weight: 600; text-decoration: none;">Select All</a>
+                    <span style="color: #cbd5e0;">|</span>
+                    <a href="javascript:void(0)" onclick="toggleAllIbcRibbons(false)" style="color: #64748b; font-weight: 600; text-decoration: none;">Clear All</a>
+                </div>
+            </div>
+            <div id="ibcTableRibbonsContainer" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
+        </div>
