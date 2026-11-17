@@ -1,0 +1,21 @@
+.integrated-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+.integrated-header .logo {
+    position: static !important;
+    margin: 0 !important;
+}
+.integrated-header .logo img {
+    height: 54px;
+    width: auto;
+    border-radius: 6px;
+}
+.integrated-header .bcs {
+    position: static !important;
+    margin: 0 !important;
+    font-size: 28px;
+    font-weight: 800;
+}
