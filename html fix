@@ -1,32 +1,73 @@
-def generate_single_bseg_excel(self, bseg_key: str, tabs_dict: dict, table_columns: dict, out_path: str):
-    wb_bs = openpyxl.Workbook()
-    first = True
-    n_id, o_id = bseg_key.split("vs")
-    for tab_name, rows in tabs_dict.items():
-        ws = wb_bs.active if first else wb_bs.create_sheet(title=tab_name)
-        ws.title = tab_name
-        first = False
-        self._write_side_by_side_sheet(ws, n_id, o_id, rows, table_columns.get(tab_name, []))
-    self._style_and_autofit(wb_bs)
-    wb_bs.save(out_path)
+@ibc_bp.route("/api/ibc/download/<task_id>/<filename>", methods=["GET"])
+def download_ibc_report(task_id, filename):
+    """Serves full reports instantly, OR builds filtered reports in-memory for selected ?tables=..."""
+    import hashlib
+    base_dir = get_base_dir()
+    if not filename.endswith((".xlsx", ".zip", ".docx")):
+        filename = f"{filename}.xlsx"
+    safe_name = secure_filename(filename)
 
-def generate_single_bill_excel(self, bill_key: str, b_data: dict, results: dict, out_path: str):
-    wb_bi = openpyxl.Workbook()
-    first = True
-    raw_pair = bill_key.replace("bill_", "").split("vs")
-    n_b, o_b = raw_pair[0], raw_pair[1]
-    bill_tbl_names = results.get("active_bill_tables", list(BILL_TABLE_REGISTRY.keys()))
-    for tbl_name in bill_tbl_names:
-        ws = wb_bi.active if first else wb_bi.create_sheet(title=tbl_name)
-        ws.title = tbl_name
-        first = False
-        self._write_side_by_side_sheet(ws, n_b, o_b, b_data.get(tbl_name, []), results.get("table_columns", {}).get(tbl_name, []))
-    ws_bs_sum = wb_bi.create_sheet(title="BSEG_Summary")
-    ws_bs_sum.append(["SA_ID", "New_bseg", "old_bseg", "Rate_cd", "match", "mismatch"])
-    for ck in b_data.get("child_bseg_keys", []):
-        match_b = next((x for x in results["bseg_summary"] if x["download"] == ck), None)
-        if match_b:
-            ws_bs_sum.append([match_b["SA_ID"], match_b["New_bseg"], match_b["old_bseg"], match_b["Rate_cd"],
-                              match_b["Total_row_validated_match"], match_b["Total_row_validated_mismatch"]])
-    self._style_and_autofit(wb_bi)
-    wb_bi.save(out_path)
+    job = IBC_JOBS.get(task_id)
+    tables_param = (request.args.get("tables") or "").strip()
+
+    # If no table filter specified (all tables), serve the pre-built file directly
+    if not tables_param or not job or "raw_results" not in job:
+        file_path = os.path.join(base_dir, "output", f"ibc_run_{task_id}", safe_name)
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"Report file '{safe_name}' not found."}), 404
+    else:
+        # Build & cache filtered report in a subfolder based on selected tables
+        sel_tables = [t.strip() for t in tables_param.split(",") if t.strip()]
+        tbl_hash = hashlib.md5(",".join(sorted(sel_tables)).encode()).hexdigest()[:6]
+        filt_dir = os.path.join(base_dir, "output", f"ibc_run_{task_id}", f"filt_{tbl_hash}")
+        os.makedirs(filt_dir, exist_ok=True)
+        file_path = os.path.join(filt_dir, safe_name)
+
+        if not os.path.exists(file_path):
+            engine = IBCEngine(env=job["env"], scope=job["scope"], skip_db=True)
+            f_res, f_kpis, f_tstats = engine.filter_results_by_tables(job["raw_results"], sel_tables)
+
+            if safe_name.endswith(".docx"):
+                f_charts = _generate_matplotlib_charts(f_kpis, f_tstats)
+                docx_out = engine.generate_executive_word_report(
+                    kpis=f_kpis, table_stats=f_tstats, results=f_res,
+                    charts_buf=f_charts, output_dir=filt_dir, task_id=task_id
+                )
+                file_path = docx_out
+            elif safe_name.startswith("IBC_Master_Report"):
+                master_out = engine.generate_all_reports(
+                    job["df_input"], job["df_ibc_input"], f_res, filt_dir, build_drilldowns=False
+                )
+                file_path = master_out
+            elif safe_name.endswith(".zip"):
+                engine.generate_all_reports(job["df_input"], job["df_ibc_input"], f_res, filt_dir, build_drilldowns=True)
+                f_charts = _generate_matplotlib_charts(f_kpis, f_tstats)
+                engine.generate_executive_word_report(
+                    kpis=f_kpis, table_stats=f_tstats, results=f_res,
+                    charts_buf=f_charts, output_dir=filt_dir, task_id=task_id
+                )
+                with zipfile.ZipFile(file_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for root, _, files in os.walk(filt_dir):
+                        for f in files:
+                            if f != safe_name and f.endswith((".xlsx", ".docx")):
+                                zf.write(os.path.join(root, f), arcname=f)
+            elif safe_name.startswith("bill_"):
+                b_key = safe_name.replace(".xlsx", "")
+                b_data = f_res["bill_drilldowns"].get(b_key)
+                if not b_data:
+                    return jsonify({"error": "Bill drilldown not found."}), 404
+                engine.generate_single_bill_excel(b_key, b_data, f_res, file_path)
+            else:
+                bs_key = safe_name.replace(".xlsx", "")
+                tabs_dict = f_res["bseg_drilldowns"].get(bs_key)
+                if not tabs_dict:
+                    return jsonify({"error": "BSEG drilldown not found."}), 404
+                engine.generate_single_bseg_excel(bs_key, tabs_dict, f_res.get("table_columns", {}), file_path)
+
+    if safe_name.endswith(".zip"):
+        mime = "application/zip"
+    elif safe_name.endswith(".docx"):
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return send_file(file_path, as_attachment=True, download_name=safe_name, mimetype=mime)
