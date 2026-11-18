@@ -1,15 +1,42 @@
-# 1. Pie 1: Overall Level (BSEG Level OR Bill Level)
-    try:
-        scope = (results or {}).get("scope", "bill_and_bseg")
-        if overall_mode == "bill" and scope != "bseg_only":
-            bill_sum = (results or {}).get("bill_summary", [])
-            b_match = sum(1 for bi in bill_sum if (bi.get("Total_row_validated_mismatch", 0) or 0) == 0)
-            b_mismatch = sum(1 for bi in bill_sum if (bi.get("Total_row_validated_mismatch", 0) or 0) > 0)
-            charts["overall_bseg_png"] = _render_pie_png(b_match, b_mismatch, "Overall (Bill Level)", "Bills")
+tables_param = (request.args.get("tables") or "").strip()
+    overall_mode = (request.args.get("overallMode") or "bseg").strip().lower()
+
+    # Serve pre-built file ONLY when all tables are included AND overallMode is default ("bseg")
+    if (not tables_param and overall_mode == "bseg") or not job or "raw_results" not in job:
+        file_path = os.path.join(base_dir, "output", f"ibc_run_{task_id}", safe_name)
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"Report file '{safe_name}' not found."}), 404
+    else:
+        if tables_param:
+            sel_tables = [t.strip() for t in tables_param.split(",") if t.strip()]
         else:
-            bseg_sum = (results or {}).get("bseg_summary", [])
-            bseg_match = sum(1 for b in bseg_sum if (b.get("Total_row_validated_mismatch", 0) or 0) == 0)
-            bseg_mismatch = sum(1 for b in bseg_sum if (b.get("Total_row_validated_mismatch", 0) or 0) > 0)
-            charts["overall_bseg_png"] = _render_pie_png(bseg_match, bseg_mismatch, "Overall (BSEG Level)", "BSEGs")
-    except Exception as e:
-        print(f"[IBC Chart Overall Pie Error] {e}")
+            sel_tables = list(BILL_TABLE_REGISTRY.keys()) + list(BSEG_TABLE_REGISTRY.keys())
+
+        cache_key = f"{','.join(sorted(sel_tables))}|{overall_mode}"
+        tbl_hash = hashlib.md5(cache_key.encode()).hexdigest()[:6]
+        filt_dir = os.path.join(base_dir, "output", f"ibc_run_{task_id}", f"filt_{tbl_hash}")
+        os.makedirs(filt_dir, exist_ok=True)
+        file_path = os.path.join(filt_dir, safe_name)
+
+        if not os.path.exists(file_path):
+            engine = IBCEngine(env=job["env"], scope=job["scope"], skip_db=True)
+            f_res, f_kpis, f_tstats = engine.filter_results_by_tables(job["raw_results"], sel_tables)
+
+            if safe_name.endswith(".docx"):
+                f_charts = _generate_matplotlib_charts(f_kpis, f_tstats, f_res, overall_mode=overall_mode)
+                docx_out = engine.generate_executive_word_report(
+                    kpis=f_kpis, table_stats=f_tstats, results=f_res,
+                    charts_buf=f_charts, output_dir=filt_dir, task_id=task_id,
+                    overall_mode=overall_mode
+                )
+                file_path = docx_out
+            ...
+            elif safe_name.endswith(".zip"):
+                engine.generate_all_reports(job["df_input"], job["df_ibc_input"], f_res, filt_dir, build_drilldowns=True)
+                f_charts = _generate_matplotlib_charts(f_kpis, f_tstats, f_res, overall_mode=overall_mode)
+                engine.generate_executive_word_report(
+                    kpis=f_kpis, table_stats=f_tstats, results=f_res,
+                    charts_buf=f_charts, output_dir=filt_dir, task_id=task_id,
+                    overall_mode=overall_mode
+                )
+                ...
