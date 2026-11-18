@@ -1,22 +1,120 @@
-// 1. PIE (Overall): BSEG Level OR Bill Level
-     if (ovBox) {
-         if (_ibcOverallPieMode === "bill" && _ibcJobData && _ibcJobData.scope !== "bseg_only") {
-             const bills = _ibcJobData.bill_summary || [];
-             let bPass = 0, bFail = 0;
-             bills.forEach(bi => {
-                 const mm = bi._filtered_mismatch !== undefined ? bi._filtered_mismatch : (bi.Total_row_validated_mismatch || 0);
-                 if (mm === 0) bPass++;
-                 else bFail++;
-             });
-             ovBox.innerHTML = _buildTwoSlicePieSvg(bPass, bFail, "Bills", "Bills Passed");
-         } else {
-             const bsegs = (_ibcJobData && _ibcJobData.bseg_summary) ? _ibcJobData.bseg_summary : [];
-             let bsegMatch = 0, bsegMismatch = 0;
-             bsegs.forEach(b => {
-                 const mm = b._filtered_mismatch !== undefined ? b._filtered_mismatch : (b.Total_row_validated_mismatch || 0);
-                 if (mm === 0) bsegMatch++;
-                 else bsegMismatch++;
-             });
-             ovBox.innerHTML = _buildTwoSlicePieSvg(bsegMatch, bsegMismatch, "BSEGs", "BSEGs Passed");
-         }
-     }
+def _render_pie_png(matched: int, mismatched: int, title: str, unit_lbl: str) -> io.BytesIO:
+    """Renders a clean 2-slice Doughnut chart PNG (No exception slice) using thread-safe Figure."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    fig = Figure(figsize=(3.1, 2.5), dpi=140)
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+
+    total = matched + mismatched
+    if total > 0:
+        vals = [matched, mismatched]
+        colors = ["#16a34a", "#dc2626"]
+        pct = (matched / total) * 100
+        ax.pie(
+            vals, colors=colors, startangle=90, counterclock=False,
+            wedgeprops=dict(width=0.38, edgecolor="white", linewidth=2)
+        )
+        ax.text(0, 0.08, f"{pct:.1f}%", ha="center", va="center", fontsize=13, fontweight="bold", color="#003366")
+        ax.text(0, -0.18, f"{total:,} {unit_lbl}", ha="center", va="center", fontsize=8, color="#64748b")
+        ax.legend(
+            [f"Matched ({matched:,})", f"Mismatch ({mismatched:,})"],
+            loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=2, frameon=False, fontsize=7.5
+        )
+    else:
+        ax.pie([1], colors=["#e2e8f0"], wedgeprops=dict(width=0.38, edgecolor="white"))
+        ax.text(0, 0, "Excluded\n(0 Rows)", ha="center", va="center", fontsize=8.5, fontweight="bold", color="#94a3b8")
+
+    ax.set_title(title, fontsize=9.5, fontweight="bold", color="#1e293b", pad=4)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True, bbox_inches="tight")
+    buf.seek(0)
+    return buf
+
+
+def _generate_matplotlib_charts(kpis: dict, table_stats: dict, results: dict = None) -> dict:
+    """Generates 3 Pie Charts (Overall BSEG, SQI, Calc Lines) + 1 Full-Width Bar Chart for the Word Report."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    charts = {
+        "overall_bseg_png": None,
+        "sq_png": None,
+        "calc_ln_png": None,
+        "table_png": None,
+        "overall_b64": "",
+        "table_b64": ""
+    }
+
+    # 1. Pie 1: Overall BSEG-Level Match vs Mismatch
+    try:
+        bseg_sum = (results or {}).get("bseg_summary", [])
+        bseg_match = sum(1 for b in bseg_sum if (b.get("Total_row_validated_mismatch", 0) or 0) == 0)
+        bseg_mismatch = sum(1 for b in bseg_sum if (b.get("Total_row_validated_mismatch", 0) or 0) > 0)
+        charts["overall_bseg_png"] = _render_pie_png(bseg_match, bseg_mismatch, "Overall (BSEG Level)", "BSEGs")
+    except Exception as e:
+        print(f"[IBC Chart Overall Pie Error] {e}")
+
+    # 2. Pie 2: SQ Details (CI_BSEG_SQ Rows)
+    try:
+        sq_st = table_stats.get("CI_BSEG_SQ", {"match": 0, "mismatch": 0})
+        charts["sq_png"] = _render_pie_png(sq_st.get("match", 0), sq_st.get("mismatch", 0), "SQ Details (CI_BSEG_SQ)", "Rows")
+    except Exception as e:
+        print(f"[IBC Chart SQ Pie Error] {e}")
+
+    # 3. Pie 3: Calc Lines (CI_BSEG_CALC_LN Rows)
+    try:
+        ln_st = table_stats.get("CI_BSEG_CALC_LN", {"match": 0, "mismatch": 0})
+        charts["calc_ln_png"] = _render_pie_png(ln_st.get("match", 0), ln_st.get("mismatch", 0), "Calc Lines (CI_BSEG_CALC_LN)", "Rows")
+    except Exception as e:
+        print(f"[IBC Chart CalcLn Pie Error] {e}")
+
+    # 4. Bottom Full-Width Bar Chart (By CC&B Table)
+    try:
+        fig = Figure(figsize=(7.6, 2.4), dpi=140)
+        FigureCanvasAgg(fig)
+        ax = fig.add_subplot(111)
+
+        tbl_names = list(table_stats.keys())
+        short_names = [t.replace("CI_", "") for t in tbl_names]
+        m_vals = [table_stats[t].get("match", 0) for t in tbl_names]
+        mm_vals = [table_stats[t].get("mismatch", 0) for t in tbl_names]
+
+        if tbl_names:
+            x = list(range(len(short_names)))
+            width = 0.35
+            bars1 = ax.bar([i - width / 2 for i in x], m_vals, width, label="Match", color="#16a34a")
+            bars2 = ax.bar([i + width / 2 for i in x], mm_vals, width, label="Mismatch", color="#dc2626")
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(short_names, fontsize=8, fontweight="bold", color="#334155")
+            ax.tick_params(axis="y", labelsize=8)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.grid(axis="y", linestyle="--", alpha=0.4)
+            ax.legend(frameon=False, fontsize=8, loc="upper right")
+
+            for bar in list(bars1) + list(bars2):
+                h = bar.get_height()
+                if h > 0:
+                    ax.annotate(
+                        f"{int(h):,}",
+                        xy=(bar.get_x() + bar.get_width() / 2, h),
+                        xytext=(0, 2), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=7.5, fontweight="bold"
+                    )
+        else:
+            ax.text(0.5, 0.5, "No Tables Selected", ha="center", va="center", color="#94a3b8")
+            ax.axis("off")
+
+        ax.set_title("Validation Breakdown by CC&B Table", fontsize=9.5, fontweight="bold", color="#1e293b", pad=6)
+        fig.tight_layout()
+        buf_bar = io.BytesIO()
+        fig.savefig(buf_bar, format="png", transparent=True, bbox_inches="tight")
+        buf_bar.seek(0)
+        charts["table_png"] = buf_bar
+    except Exception as e:
+        print(f"[IBC Chart Bar Error] {e}")
+
+    return charts
