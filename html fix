@@ -1,30 +1,19 @@
-<!-- TOP CHART ROW: 3 LARGER PIE CHARTS (Overall First + Toggle | SQ Details | Calc Lines) -->
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px;">
-            <!-- Pie 1 (FIRST / LEFT): Overall Level with BSEG vs Bill Toggle -->
-            <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; text-align: center;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span id="ibcOverallPieTitle" style="font-size: 12.5px; font-weight: 700; color: #334155;">Overall (BSEG Level)</span>
-                    <div style="display: flex; gap: 4px;">
-                        <button type="button" id="pieBtnBseg" onclick="setIbcOverallPieMode('bseg')" style="padding: 2px 8px; font-size: 10.5px; font-weight: 600; border: 1px solid #cbd5e0; border-radius: 4px; cursor: pointer; background: #007bff; color: #fff;">BSEG</button>
-                        <button type="button" id="pieBtnBill" onclick="setIbcOverallPieMode('bill')" style="padding: 2px 8px; font-size: 10.5px; font-weight: 600; border: 1px solid #cbd5e0; border-radius: 4px; cursor: pointer; background: #f8fafc; color: #334155;">Bill</button>
-                    </div>
-                </div>
-                <div id="ibcOverallChartBox" style="height: 215px; display: flex; align-items: center; justify-content: center;"></div>
-            </div>
-
-            <!-- Pie 2 (MIDDLE): SQ Details (Row-level) -->
-            <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; text-align: center;">
-                <div style="font-size: 12.5px; font-weight: 700; color: #334155; margin-bottom: 6px; text-align: left;">
-                    SQ Details (CI_BSEG_SQ Rows)
-                </div>
-                <div id="ibcSqPieBox" style="height: 215px; display: flex; align-items: center; justify-content: center;"></div>
-            </div>
-
-            <!-- Pie 3 (RIGHT): Calc Lines (Row-level) -->
-            <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; text-align: center;">
-                <div style="font-size: 12.5px; font-weight: 700; color: #334155; margin-bottom: 6px; text-align: left;">
-                    Calc Lines (CI_BSEG_CALC_LN Rows)
-                </div>
-                <div id="ibcCalcLnPieBox" style="height: 215px; display: flex; align-items: center; justify-content: center;"></div>
-            </div>
-        </div>
+function setIbcOverallPieMode(mode) {
+     _ibcOverallPieMode = mode;
+     const bBseg = document.getElementById("pieBtnBseg");
+     const bBill = document.getElementById("pieBtnBill");
+     if (bBseg) {
+         bBseg.style.background = mode === "bseg" ? "#007bff" : "#f8fafc";
+         bBseg.style.color = mode === "bseg" ? "#fff" : "#334155";
+     }
+     if (bBill) {
+         bBill.style.background = mode === "bill" ? "#007bff" : "#f8fafc";
+         bBill.style.color = mode === "bill" ? "#fff" : "#334155";
+     }
+     const titleEl = document.getElementById("ibcOverallPieTitle");
+     if (titleEl) {
+         titleEl.textContent = mode === "bseg" ? "Overall (BSEG Level)" : "Overall (Bill Level)";
+     }
+     drawIbcChartsByScope();
+ }
+ window.setIbcOverallPieMode = setIbcOverallPieMode;
