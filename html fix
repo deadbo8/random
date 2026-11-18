@@ -1,28 +1,15 @@
-function updateIbcDownloadLinks() {
-        if (!_ibcJobData) return;
-        const tblParam = getIbcTablesQueryParam(); // "" or "?tables=..."
-        const buildUrl = (baseUrl, includeOverallMode = false) => {
-            if (!baseUrl) return "#";
-            const params = new URLSearchParams(tblParam.replace(/^\?/, ""));
-            if (includeOverallMode && _ibcOverallPieMode === "bill") {
-                params.set("overallMode", "bill");
-            }
-            const qs = params.toString();
-            return qs ? `${baseUrl}?${qs}` : baseUrl;
-        };
-
-        const mBtn = document.getElementById("ibcMasterDownloadBtn");
-        const zBtn = document.getElementById("ibcZipDownloadBtn");
-        const wBtn = document.getElementById("ibcWordDownloadBtn");
-        if (mBtn) mBtn.href = buildUrl(_ibcJobData.master_download_url, false);
-        if (zBtn) zBtn.href = buildUrl(_ibcJobData.zip_download_url, true);
-        if (wBtn) wBtn.href = buildUrl(_ibcJobData.word_download_url, true);
-    }
-
-
-
-
-
-
-
-
+# 1. Pie 1: Overall Level (BSEG Level OR Bill Level)
+    try:
+        scope = (results or {}).get("scope", "bill_and_bseg")
+        if overall_mode == "bill" and scope != "bseg_only":
+            bill_sum = (results or {}).get("bill_summary", [])
+            b_match = sum(1 for bi in bill_sum if (bi.get("Total_row_validated_mismatch", 0) or 0) == 0)
+            b_mismatch = sum(1 for bi in bill_sum if (bi.get("Total_row_validated_mismatch", 0) or 0) > 0)
+            charts["overall_bseg_png"] = _render_pie_png(b_match, b_mismatch, "Overall (Bill Level)", "Bills")
+        else:
+            bseg_sum = (results or {}).get("bseg_summary", [])
+            bseg_match = sum(1 for b in bseg_sum if (b.get("Total_row_validated_mismatch", 0) or 0) == 0)
+            bseg_mismatch = sum(1 for b in bseg_sum if (b.get("Total_row_validated_mismatch", 0) or 0) > 0)
+            charts["overall_bseg_png"] = _render_pie_png(bseg_match, bseg_mismatch, "Overall (BSEG Level)", "BSEGs")
+    except Exception as e:
+        print(f"[IBC Chart Overall Pie Error] {e}")
