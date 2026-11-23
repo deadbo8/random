@@ -1,139 +1,95 @@
-def discover_and_pair(self, df_user_input: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
-        self.skipped_invalid = []
-        cols = list(df_user_input.columns)
-        if len(cols) < 2:
-            raise ValueError("User_Input Excel must have at least 2 columns: 'New Bill id' and 'cancelled Bill ID'")
 
-        col_map = {str(c).strip().lower().replace(" ", "_"): c for c in cols}
-        new_bill_col = col_map.get("new_bill_id", cols[0])
-        old_bill_col = col_map.get("cancelled_bill_id", col_map.get("canceled_bill_id", cols[1]))
-        sa_col = col_map.get("sa_id")
-        new_bseg_col = col_map.get("new_bseg", col_map.get("new_bseg_id"))
-        old_bseg_col = col_map.get("old_bseg", col_map.get("old_bceg", col_map.get("old_bseg_id")))
+if getattr(self, "skipped_invalid", None):
+         ws_skip = wb_master.create_sheet(title="Skipped_Invalid_Input")
+         ws_skip.append(["Excel Row #", "New ID", "Cancelled ID", "Reason Skipped"])
+         for s in self.skipped_invalid:
+             ws_skip.append([s["row_num"], s["new_id"], s["old_id"], s["reason"]])
 
-        def _is_valid_id(val: str) -> bool:
-            return bool(val) and val.isdigit() and set(val) != {"0"}
 
-        raw_rows = []
-        for idx, row in df_user_input.iterrows():
-            row_num = idx + 2  # Excel row number (header is row 1)
-            raw_nb = str(row.get(new_bill_col, "") or "").strip()
-            raw_ob = str(row.get(old_bill_col, "") or "").strip()
-            nb = norm_bill_id(raw_nb)
-            ob = norm_bill_id(raw_ob)
-            sa = norm_sa_id(row.get(sa_col)) if sa_col else ""
-            n_bs = norm_bseg_id(row.get(new_bseg_col)) if new_bseg_col else ""
-            o_bs = norm_bseg_id(row.get(old_bseg_col)) if old_bseg_col else ""
 
-            if not (nb or ob or n_bs or o_bs):
-                continue
 
-            # Explicit BSEG pair check
-            if n_bs or o_bs:
-                if not _is_valid_id(n_bs) or not _is_valid_id(o_bs):
-                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs or raw_nb, "old_id": o_bs or raw_ob, "reason": "Invalid or blank BSEG ID."})
-                    continue
-                if n_bs == o_bs:
-                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": "Same BSEG ID provided for both New and Old. Cannot compare an ID against itself."})
-                    continue
-            else:
-                # Standard 2-column Bill / BSEG ID check
-                if not _is_valid_id(nb) or not _is_valid_id(ob):
-                    self.skipped_invalid.append({"row_num": row_num, "new_id": raw_nb, "old_id": raw_ob, "reason": "Invalid, non-numeric, blank, or all-zero ID."})
-                    continue
-                if nb == ob:
-                    self.skipped_invalid.append({"row_num": row_num, "new_id": nb, "old_id": ob, "reason": "Same ID provided for both New and Cancelled. Cannot compare a bill against itself."})
-                    continue
 
-            raw_rows.append({"row_num": row_num, "nb": nb, "ob": ob, "sa": sa, "n_bs": n_bs, "o_bs": o_bs})
 
-        if not raw_rows:
-            return pd.DataFrame(), []
 
-        all_lookup_ids = list({x for r in raw_rows for x in (r["nb"], r["ob"], r["n_bs"], r["o_bs"]) if x})
-        bseg_rows = self.db.query_ci_bseg_discovery(all_lookup_ids)
 
-        all_bseg_ids = list({r["bseg_id"] for r in bseg_rows} | {r["n_bs"] for r in raw_rows if r["n_bs"]})
-        rate_map = self.db.query_rate_schedules(all_bseg_ids)
 
-        ibc_input_rows = []
-        for r in raw_rows:
-            row_num = r["row_num"]
-            new_id, old_id = r["nb"], r["ob"]
 
-            # Case 1: Explicit BSEG IDs supplied
-            if r["n_bs"] and r["o_bs"]:
-                n_bs, o_bs = r["n_bs"], r["o_bs"]
-                ns_meta = next((b for b in bseg_rows if b["bseg_id"] == n_bs), None)
-                os_meta = next((b for b in bseg_rows if b["bseg_id"] == o_bs), None)
-                if not ns_meta and not os_meta:
-                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": f"Neither New BSEG ({n_bs}) nor Old BSEG ({o_bs}) exists in {self.env.upper()} database."})
-                    continue
-                if not ns_meta:
-                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": f"New BSEG ({n_bs}) not found in {self.env.upper()} database."})
-                    continue
-                if not os_meta:
-                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": f"Old BSEG ({o_bs}) not found in {self.env.upper()} database."})
-                    continue
+if not structured_pairs:
+         reasons = "\n".join(
+             f"• Row {s['row_num']} ({s['new_id']} vs {s['old_id']}): {s['reason']}"
+             for s in (engine.skipped_invalid or [])[:10]
+         )
+         err_msg = (
+             f"Validation aborted — Invalid, duplicate, or missing Bill/BSEG IDs:\n\n{reasons}"
+             if reasons else "No matching Bill or Bill Segment records found in CI_BSEG."
+         )
+         with ibc_lock:
+             job["status"] = "error"
+             job["error"] = err_msg
+         return
 
-                n_bill = ns_meta.get("bill_id") or new_id
-                o_bill = os_meta.get("bill_id") or old_id
-                sa_id = r["sa"] or ns_meta.get("sa_id") or os_meta.get("sa_id", "")
-                bp_hash = make_bill_hash(n_bill, o_bill)
-                sp_hash = make_bseg_hash(bp_hash, n_bs, o_bs)
-                ibc_input_rows.append({
-                    "New Bill id": n_bill, "cancelled Bill ID": o_bill, "SA_ID": sa_id,
-                    "New_bseg": n_bs, "old_bseg": o_bs,
-                    "Rate_cd": rate_map.get(n_bs) or rate_map.get(o_bs) or "-",
-                    "bill_pair_hash": bp_hash, "bseg_pair_hash": sp_hash
-                })
-                continue
+     with ibc_lock:
+         job["skipped_invalid"] = engine.skipped_invalid or []
 
-            # Case 2: Standard 2-column Bill IDs (or BSEG IDs) -> Verify BOTH exist in DB!
-            new_segs = [b for b in bseg_rows if b["bill_id"] == new_id or b["bseg_id"] == new_id]
-            old_segs = [b for b in bseg_rows if b["bill_id"] == old_id or b["bseg_id"] == old_id]
 
-            if not new_segs and not old_segs:
-                self.skipped_invalid.append({"row_num": row_num, "new_id": new_id, "old_id": old_id, "reason": f"Both New ID ({new_id}) and Cancelled ID ({old_id}) not found in {self.env.upper()} database."})
-                continue
-            if not new_segs:
-                self.skipped_invalid.append({"row_num": row_num, "new_id": new_id, "old_id": old_id, "reason": f"New ID ({new_id}) does not exist in {self.env.upper()} database."})
-                continue
-            if not old_segs:
-                self.skipped_invalid.append({"row_num": row_num, "new_id": new_id, "old_id": old_id, "reason": f"Cancelled ID ({old_id}) does not exist in {self.env.upper()} database."})
-                continue
 
-            bp_hash = make_bill_hash(new_id, old_id)
-            pool_old = list(old_segs)
-            paired = []
-            for ns in new_segs:
-                mo = next((o for o in pool_old if ns["can_bseg_id"] and o["bseg_id"] == ns["can_bseg_id"]), None)
-                if not mo and ns["sa_id"]:
-                    mo = next((o for o in pool_old if o["sa_id"] == ns["sa_id"] and o["bseg_id"] != ns["bseg_id"]), None)
-                if not mo and ns["sa_id"]:
-                    mo = next((o for o in pool_old if o["sa_id"] == ns["sa_id"]), None)
-                if mo:
-                    pool_old.remove(mo)
-                    paired.append((ns, mo))
-                else:
-                    paired.append((ns, None))
 
-            for rem_o in pool_old:
-                paired.append((None, rem_o))
 
-            for ns, mo in paired:
-                n_bill = ns["bill_id"] if ns else new_id
-                o_bill = mo["bill_id"] if mo else old_id
-                n_bs = ns["bseg_id"] if ns else "MISSING"
-                o_bs = mo["bseg_id"] if mo else "MISSING"
-                sa_id = ns["sa_id"] if ns else (mo["sa_id"] if mo else "")
-                rate_cd = rate_map.get(n_bs) or rate_map.get(o_bs) or "-"
-                sp_hash = make_bseg_hash(bp_hash, n_bs, o_bs)
 
-                ibc_input_rows.append({
-                    "New Bill id": n_bill, "cancelled Bill ID": o_bill, "SA_ID": sa_id,
-                    "New_bseg": n_bs, "old_bseg": o_bs, "Rate_cd": rate_cd,
-                    "bill_pair_hash": bp_hash, "bseg_pair_hash": sp_hash
-                })
 
-        return pd.DataFrame(ibc_input_rows), ibc_input_rows
+
+
+
+
+
+
+
+
+
+<!-- Warning Banner for Skipped Invalid / Same / Missing Bills -->
+     <div id="ibcSkippedBanner" style="display: none; background: #fffbeb; border: 1px solid #f59e0b; border-left: 5px solid #d97706; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; color: #92400e; font-size: 12.5px;">
+         <div style="display: flex; justify-content: space-between; align-items: center;">
+             <strong>⚠️ <span id="ibcSkippedCount">0</span> Invalid / Missing Pair(s) Skipped (Not Compared)</strong>
+             <button type="button" onclick="const l=document.getElementById('ibcSkippedList'); l.style.display=l.style.display==='none'?'block':'none';" style="background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; cursor: pointer;">
+                 Show / Hide Details
+             </button>
+         </div>
+         <ul id="ibcSkippedList" style="display: none; margin: 8px 0 0 18px; padding: 0; font-size: 12px; line-height: 1.5;"></ul>
+     </div>
+
+
+
+
+
+
+
+
+<!-- COLLAPSIBLE RATE-TYPE HORIZONTAL STACKED BAR BREAKDOWN -->
+     <div id="ibcRateBreakdownCard" style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 16px; overflow: hidden;">
+         <div onclick="toggleIbcRateBreakdown()" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; cursor: pointer; user-select: none;">
+             <div>
+                 <span style="font-size: 12.5px; font-weight: 700; color: #1e293b;">
+                     📊 Bill Segment Match vs. Mismatch by Rate Schedule
+                 </span>
+                 <span id="ibcRateBreakdownContext" style="font-size: 11.5px; font-weight: 600; color: #007bff; margin-left: 8px;">(All Bills • All Rates)</span>
+             </div>
+             <button type="button" id="ibcRateCollapseBtn" style="background: #e2e8f0; color: #334155; border: none; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; cursor: pointer;">
+                 ▼ Collapse
+             </button>
+         </div>
+         <div id="ibcRateBreakdownBody" style="padding: 12px 14px; overflow-x: auto;">
+             <table style="width: 100%; border-collapse: collapse; font-size: 12px; color: #1a202c;">
+                 <thead>
+                     <tr style="background: #f1f5f9; border-bottom: 2px solid #cbd5e1; color: #334155; text-align: left;">
+                         <th style="padding: 8px 10px; width: 140px;">Rate Schedule</th>
+                         <th style="padding: 8px 10px; width: 90px; text-align: center;">Total BSEGs</th>
+                         <th style="padding: 8px 10px; width: 95px; text-align: center; color: #16a34a;">Matched</th>
+                         <th style="padding: 8px 10px; width: 95px; text-align: center; color: #dc2626;">Mismatched</th>
+                         <th style="padding: 8px 10px; width: 85px; text-align: center;">Pass %</th>
+                         <th style="padding: 8px 10px;">Matched vs. Mismatched (Horizontal Stacked Bar)</th>
+                     </tr>
+                 </thead>
+                 <tbody id="ibcRateBreakdownTbody"></tbody>
+             </table>
+         </div>
+     </div>
