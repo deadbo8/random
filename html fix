@@ -1,12 +1,139 @@
-bill_sum = results.get("bill_summary", [])
-        bill_passed = sum(1 for bi in bill_sum if (bi.get("Total_row_validated_mismatch", 0) or 0) == 0)
-        if overall_mode == "bill" and is_bill_scope:
-            pass_bullet = f"• Bill Pass Summary: {bill_passed} of {tot_bills} Bills passed with zero mismatches.\n"
-        else:
-            pass_bullet = f"• BSEG Pass Summary: {bseg_passed} of {tot_bsegs} Bill Segments passed with zero mismatches.\n"
+def discover_and_pair(self, df_user_input: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
+        self.skipped_invalid = []
+        cols = list(df_user_input.columns)
+        if len(cols) < 2:
+            raise ValueError("User_Input Excel must have at least 2 columns: 'New Bill id' and 'cancelled Bill ID'")
 
-        story.add_run(
-            f"• Row Accuracy: {pass_rate}% ({matched:,} matched vs. {mismatched:,} mismatched out of {tot_rows:,} rows).\n"
-            + pass_bullet +
-            f"• Approved 25.4 Exceptions: {exceptions:,} extra zero-dollar calculation lines accepted via business whitelist."
-        )
+        col_map = {str(c).strip().lower().replace(" ", "_"): c for c in cols}
+        new_bill_col = col_map.get("new_bill_id", cols[0])
+        old_bill_col = col_map.get("cancelled_bill_id", col_map.get("canceled_bill_id", cols[1]))
+        sa_col = col_map.get("sa_id")
+        new_bseg_col = col_map.get("new_bseg", col_map.get("new_bseg_id"))
+        old_bseg_col = col_map.get("old_bseg", col_map.get("old_bceg", col_map.get("old_bseg_id")))
+
+        def _is_valid_id(val: str) -> bool:
+            return bool(val) and val.isdigit() and set(val) != {"0"}
+
+        raw_rows = []
+        for idx, row in df_user_input.iterrows():
+            row_num = idx + 2  # Excel row number (header is row 1)
+            raw_nb = str(row.get(new_bill_col, "") or "").strip()
+            raw_ob = str(row.get(old_bill_col, "") or "").strip()
+            nb = norm_bill_id(raw_nb)
+            ob = norm_bill_id(raw_ob)
+            sa = norm_sa_id(row.get(sa_col)) if sa_col else ""
+            n_bs = norm_bseg_id(row.get(new_bseg_col)) if new_bseg_col else ""
+            o_bs = norm_bseg_id(row.get(old_bseg_col)) if old_bseg_col else ""
+
+            if not (nb or ob or n_bs or o_bs):
+                continue
+
+            # Explicit BSEG pair check
+            if n_bs or o_bs:
+                if not _is_valid_id(n_bs) or not _is_valid_id(o_bs):
+                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs or raw_nb, "old_id": o_bs or raw_ob, "reason": "Invalid or blank BSEG ID."})
+                    continue
+                if n_bs == o_bs:
+                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": "Same BSEG ID provided for both New and Old. Cannot compare an ID against itself."})
+                    continue
+            else:
+                # Standard 2-column Bill / BSEG ID check
+                if not _is_valid_id(nb) or not _is_valid_id(ob):
+                    self.skipped_invalid.append({"row_num": row_num, "new_id": raw_nb, "old_id": raw_ob, "reason": "Invalid, non-numeric, blank, or all-zero ID."})
+                    continue
+                if nb == ob:
+                    self.skipped_invalid.append({"row_num": row_num, "new_id": nb, "old_id": ob, "reason": "Same ID provided for both New and Cancelled. Cannot compare a bill against itself."})
+                    continue
+
+            raw_rows.append({"row_num": row_num, "nb": nb, "ob": ob, "sa": sa, "n_bs": n_bs, "o_bs": o_bs})
+
+        if not raw_rows:
+            return pd.DataFrame(), []
+
+        all_lookup_ids = list({x for r in raw_rows for x in (r["nb"], r["ob"], r["n_bs"], r["o_bs"]) if x})
+        bseg_rows = self.db.query_ci_bseg_discovery(all_lookup_ids)
+
+        all_bseg_ids = list({r["bseg_id"] for r in bseg_rows} | {r["n_bs"] for r in raw_rows if r["n_bs"]})
+        rate_map = self.db.query_rate_schedules(all_bseg_ids)
+
+        ibc_input_rows = []
+        for r in raw_rows:
+            row_num = r["row_num"]
+            new_id, old_id = r["nb"], r["ob"]
+
+            # Case 1: Explicit BSEG IDs supplied
+            if r["n_bs"] and r["o_bs"]:
+                n_bs, o_bs = r["n_bs"], r["o_bs"]
+                ns_meta = next((b for b in bseg_rows if b["bseg_id"] == n_bs), None)
+                os_meta = next((b for b in bseg_rows if b["bseg_id"] == o_bs), None)
+                if not ns_meta and not os_meta:
+                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": f"Neither New BSEG ({n_bs}) nor Old BSEG ({o_bs}) exists in {self.env.upper()} database."})
+                    continue
+                if not ns_meta:
+                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": f"New BSEG ({n_bs}) not found in {self.env.upper()} database."})
+                    continue
+                if not os_meta:
+                    self.skipped_invalid.append({"row_num": row_num, "new_id": n_bs, "old_id": o_bs, "reason": f"Old BSEG ({o_bs}) not found in {self.env.upper()} database."})
+                    continue
+
+                n_bill = ns_meta.get("bill_id") or new_id
+                o_bill = os_meta.get("bill_id") or old_id
+                sa_id = r["sa"] or ns_meta.get("sa_id") or os_meta.get("sa_id", "")
+                bp_hash = make_bill_hash(n_bill, o_bill)
+                sp_hash = make_bseg_hash(bp_hash, n_bs, o_bs)
+                ibc_input_rows.append({
+                    "New Bill id": n_bill, "cancelled Bill ID": o_bill, "SA_ID": sa_id,
+                    "New_bseg": n_bs, "old_bseg": o_bs,
+                    "Rate_cd": rate_map.get(n_bs) or rate_map.get(o_bs) or "-",
+                    "bill_pair_hash": bp_hash, "bseg_pair_hash": sp_hash
+                })
+                continue
+
+            # Case 2: Standard 2-column Bill IDs (or BSEG IDs) -> Verify BOTH exist in DB!
+            new_segs = [b for b in bseg_rows if b["bill_id"] == new_id or b["bseg_id"] == new_id]
+            old_segs = [b for b in bseg_rows if b["bill_id"] == old_id or b["bseg_id"] == old_id]
+
+            if not new_segs and not old_segs:
+                self.skipped_invalid.append({"row_num": row_num, "new_id": new_id, "old_id": old_id, "reason": f"Both New ID ({new_id}) and Cancelled ID ({old_id}) not found in {self.env.upper()} database."})
+                continue
+            if not new_segs:
+                self.skipped_invalid.append({"row_num": row_num, "new_id": new_id, "old_id": old_id, "reason": f"New ID ({new_id}) does not exist in {self.env.upper()} database."})
+                continue
+            if not old_segs:
+                self.skipped_invalid.append({"row_num": row_num, "new_id": new_id, "old_id": old_id, "reason": f"Cancelled ID ({old_id}) does not exist in {self.env.upper()} database."})
+                continue
+
+            bp_hash = make_bill_hash(new_id, old_id)
+            pool_old = list(old_segs)
+            paired = []
+            for ns in new_segs:
+                mo = next((o for o in pool_old if ns["can_bseg_id"] and o["bseg_id"] == ns["can_bseg_id"]), None)
+                if not mo and ns["sa_id"]:
+                    mo = next((o for o in pool_old if o["sa_id"] == ns["sa_id"] and o["bseg_id"] != ns["bseg_id"]), None)
+                if not mo and ns["sa_id"]:
+                    mo = next((o for o in pool_old if o["sa_id"] == ns["sa_id"]), None)
+                if mo:
+                    pool_old.remove(mo)
+                    paired.append((ns, mo))
+                else:
+                    paired.append((ns, None))
+
+            for rem_o in pool_old:
+                paired.append((None, rem_o))
+
+            for ns, mo in paired:
+                n_bill = ns["bill_id"] if ns else new_id
+                o_bill = mo["bill_id"] if mo else old_id
+                n_bs = ns["bseg_id"] if ns else "MISSING"
+                o_bs = mo["bseg_id"] if mo else "MISSING"
+                sa_id = ns["sa_id"] if ns else (mo["sa_id"] if mo else "")
+                rate_cd = rate_map.get(n_bs) or rate_map.get(o_bs) or "-"
+                sp_hash = make_bseg_hash(bp_hash, n_bs, o_bs)
+
+                ibc_input_rows.append({
+                    "New Bill id": n_bill, "cancelled Bill ID": o_bill, "SA_ID": sa_id,
+                    "New_bseg": n_bs, "old_bseg": o_bs, "Rate_cd": rate_cd,
+                    "bill_pair_hash": bp_hash, "bseg_pair_hash": sp_hash
+                })
+
+        return pd.DataFrame(ibc_input_rows), ibc_input_rows
