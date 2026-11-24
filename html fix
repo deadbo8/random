@@ -1,21 +1,35 @@
-let _ibcTableMetaMap = {};      // technical_name -> {functional_name, order, default_selected, level}
- let _ibcRateCategories = {};    // RATE_CD -> {type, meter_type}
+_ibcTableMetaMap = {};
+   (data.table_meta || []).forEach(m => { _ibcTableMetaMap[m.table] = m; });
+   _ibcRateCategories = data.rate_categories || {};
 
- function getIbcFuncName(tbl) {
-     return (_ibcTableMetaMap[tbl] && _ibcTableMetaMap[tbl].functional_name) || tbl;
- }
+   _ibcAllJobTables = Object.keys(tStats).sort((a, b) =>
+       ((_ibcTableMetaMap[a]?.order) || 99) - ((_ibcTableMetaMap[b]?.order) || 99)
+   );
+   // By default, select only tables 1-5 (Bseg Headers, Reads, SQIs, Calc Lines, Financials)
+   const defaultActive = _ibcAllJobTables.filter(t => _ibcTableMetaMap[t] ? _ibcTableMetaMap[t].default_selected : true);
+   _ibcSelectedTables = new Set(defaultActive.length ? defaultActive : _ibcAllJobTables);
 
- async function uploadIbcExceptionsFile(inputEl) {
-     if (!inputEl.files || !inputEl.files[0]) return;
-     const fd = new FormData();
-     fd.append("exceptionsFile", inputEl.files[0]);
-     try {
-         const res = await fetch("/api/ibc/exceptions/upload", { method: "POST", body: fd });
-         const d = await res.json();
-         alert(res.ok ? d.message : `Upload failed: ${d.error}`);
-     } catch (e) {
-         alert("Upload error: " + e.message);
-     }
-     inputEl.value = "";
- }
- window.uploadIbcExceptionsFile = uploadIbcExceptionsFile;
+   // Populate Rate Breakdown's own Type, Meter Type & Rate dropdowns from season_config
+   const typesSet = new Set(), metersSet = new Set(), ownRatesSet = new Set();
+   bsegs.forEach(b => {
+       const rc = (b.Rate_cd || "").toUpperCase();
+       if (rc && rc !== "-") ownRatesSet.add(rc);
+       const cat = _ibcRateCategories[rc];
+       typesSet.add(cat ? cat.type : "Other");
+       metersSet.add(cat ? cat.meter_type : "Other");
+   });
+   const tSel = document.getElementById("ibcRateCatTypeFilter");
+   if (tSel) tSel.innerHTML = `<option value="ALL">All Types</option>` + Array.from(typesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
+   const mSel = document.getElementById("ibcRateCatMeterFilter");
+   if (mSel) mSel.innerHTML = `<option value="ALL">All Meter Types</option>` + Array.from(metersSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
+   const rSel = document.getElementById("ibcRateOwnRateFilter");
+   if (rSel) rSel.innerHTML = `<option value="ALL">All Rates</option>` + Array.from(ownRatesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
+
+   // Ensure Rate Breakdown starts collapsed by default
+   const rbBody = document.getElementById("ibcRateBreakdownBody");
+   const rbBtn = document.getElementById("ibcRateCollapseBtn");
+   if (rbBody) rbBody.style.display = "none";
+   if (rbBtn) rbBtn.textContent = "▶ Expand";
+
+   renderIbcTableRibbons();
+   applyIbcRibbonFilterToDashboard();
