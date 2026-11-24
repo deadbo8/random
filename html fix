@@ -1,164 +1,45 @@
-import os
-import hashlib
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import pandas as pd
-import time
+from controller.ibc.ibc_db import (
+    BILL_TABLE_REGISTRY,
+    BSEG_TABLE_REGISTRY,
+    TABLE_DISPLAY_ORDER,
+    TABLE_FUNCTIONAL_NAMES,
+    DEFAULT_SELECTED_TABLES,
+    IBCDataFetcher,
+    norm_bill_id,
+    norm_bseg_id,
+    norm_sa_id,
+    make_bill_hash,
+    make_bseg_hash,
+)
 
-import controller.charge_utils
-from controller.db_fetch import get_connection, FETCH_DB_ENV
-
-# ------------------- FUNCTIONAL NAMES & SEQUENCE (1 to 7) ------------------- #
-TABLE_DISPLAY_ORDER = [
-    "CI_BSEG_CALC",     # 1. Bseg Headers
-    "CI_BSEG_READ",     # 2. Reads
-    "CI_BSEG_SQ",       # 3. SQIs
-    "CI_BSEG_CALC_LN",  # 4. Calc Lines
-    "CI_FT_GL",         # 5. Financials
-    "CI_BILL_MSGS",     # 6. Bill Msgs
-    "CI_BSEG_MSG",      # 7. Bseg Msgs
-]
-
-TABLE_FUNCTIONAL_NAMES = {
-    "CI_BSEG_CALC": "Bseg Headers",
-    "CI_BSEG_READ": "Reads",
-    "CI_BSEG_SQ": "SQIs",
-    "CI_BSEG_CALC_LN": "Calc Lines",
-    "CI_FT_GL": "Financials",
-    "CI_BILL_MSGS": "Bill Msgs",
-    "CI_BSEG_MSG": "Bseg Msgs",
-}
-
-# By default, only tables 1-5 are selected
-DEFAULT_SELECTED_TABLES = [
-    "CI_BSEG_CALC",
-    "CI_BSEG_READ",
-    "CI_BSEG_SQ",
-    "CI_BSEG_CALC_LN",
-    "CI_FT_GL",
-]
-
-# ------------------- TABLE REGISTRY ------------------- #
-BILL_TABLE_REGISTRY = {
-    "CI_BILL_MSGS": {
-        "id_col": "BILL_ID",
-        "ignore_cols": {"BILL_ID", "SEQNO"},
-        "align_keys": ["BILL_MSG_CD"],
-        "check_25_4": False,
-        "functional_name": "Bill Msgs",
-        "description": "Bill Level Messages",
-    }
-}
-
-BSEG_TABLE_REGISTRY = {
-    "CI_BSEG_CALC": {
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "HEADER_SEQ"},
-        "align_keys": ["RS_CD"],
-        "check_25_4": False,
-        "functional_name": "Bseg Headers",
-        "description": "Bseg Headers",
-    },
-    "CI_BSEG_READ": {
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO"},
-        "align_keys": ["SP_ID", "UOM_CD", "TOU_CD"],
-        "check_25_4": False,
-        "functional_name": "Reads",
-        "description": "Reads",
-    },
-    "CI_BSEG_SQ": {
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO"},
-        "align_keys": ["UOM_CD", "TOU_CD", "SQI_CD"],
-        "check_25_4": False,
-        "functional_name": "SQIs",
-        "description": "SQIs",
-    },
-    "CI_BSEG_CALC_LN": {
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO", "RC_SEQ"},
-        "align_keys": ["HEADER_SEQ", "RC_SEQ"],
-        "check_25_4": True,
-        "functional_name": "Calc Lines",
-        "description": "Calc Lines",
-    },
-    "CI_FT_GL": {
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "GL_SEQ_NBR"},
-        "align_keys": ["DST_ID", "CHAR_TYPE_CD", "CHAR_VAL", "GL_ACCT"],
-        "check_25_4": False,
-        "functional_name": "Financials",
-        "description": "Financials",
-        "custom_sql": """
-            SELECT ft.SIBLING_ID as BSEG_ID,
-                   gl.GL_SEQ_NBR,
-                   gl.DST_ID,
-                   gl.CHAR_TYPE_CD,
-                   gl.AMOUNT,
-                   gl.CHAR_VAL,
-                   gl.TOT_AMT_SW,
-                   gl.STATISTIC_AMOUNT,
-                   gl.GL_ACCT
-            FROM {schema}.CI_FT_GL gl
-            INNER JOIN {schema}.CI_FT ft ON gl.FT_ID = ft.FT_ID
-            WHERE ft.SIBLING_ID IN ({binds})
-              AND ft.FT_TYPE_FLG = 'BS'
-        """,
-    },
-    "CI_BSEG_MSG": {
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO"},
-        "align_keys": ["BILL_MSG_CD"],
-        "check_25_4": False,
-        "functional_name": "Bseg Msgs",
-        "description": "Bseg Msgs",
-    },
-}
+from controller.compare_bill import load_ccb_exceptions, is_exception_match
 
 
-def load_season_config_metadata(base_dir: str) -> dict:
-    """
-    Loads Rate Schedule -> Type (Category) and Meter Type mapping
-    from storage/db_storage.xlsx (sheet: season_config).
-    """
-    xlsx_path = os.path.join(base_dir, "storage", "db_storage.xlsx")
-    rate_map = {}
-    types_set = set()
-    meter_types_set = set()
+def get_custom_exceptions_path(base_dir: str) -> str:
+    return os.path.join(base_dir, "storage", "ibc_custom_exceptions.xlsx")
 
-    if os.path.exists(xlsx_path):
+
+def load_ibc_exceptions(base_dir: str) -> list[dict]:
+    """Loads user-configured exception rules if uploaded, otherwise default CC&B exceptions."""
+    custom_path = get_custom_exceptions_path(base_dir)
+    if os.path.exists(custom_path):
         try:
-            df = pd.read_excel(xlsx_path, sheet_name="season_config", dtype=str)
-            col_map = {str(c).strip().lower(): c for c in df.columns}
-            type_col = col_map.get("type")
-            rate_col = col_map.get("rate schedule") or col_map.get("rate_schedule")
-            meter_col = col_map.get("meter type") or col_map.get("meter_type")
-
+            df = pd.read_excel(custom_path, dtype=str).fillna("")
+            rules = []
             for _, row in df.iterrows():
-                r_cd = str(row.get(rate_col, "") or "").strip().upper() if rate_col else ""
-                if not r_cd or r_cd == "NAN":
+                pat = str(row.get("Pattern", "") or row.get("pattern", "")).strip().lower()
+                if not pat:
                     continue
-                t_val = str(row.get(type_col, "") or "").strip() if type_col else ""
-                m_val = str(row.get(meter_col, "") or "").strip().upper() if meter_col else ""
-                if t_val.lower() == "nan":
-                    t_val = ""
-                if m_val.lower() == "nan":
-                    m_val = ""
-
-                rate_map[r_cd] = {
-                    "type": t_val or "Other",
-                    "meter_type": m_val or "-",
-                }
-                if t_val:
-                    types_set.add(t_val)
-                if m_val:
-                    meter_types_set.add(m_val)
+                m_type = str(row.get("Match_Type", "") or row.get("match_type", "CONTAINS")).strip().upper()
+                z_raw = str(row.get("Zero_Only", "") or row.get("zero_only", "TRUE")).strip().lower()
+                zero_only = z_raw in ("true", "1", "yes", "y")
+                rules.append({
+                    "pattern": pat,
+                    "match_type": m_type if m_type in ("EXACT", "WILDCARD", "CONTAINS") else "CONTAINS",
+                    "zero_only": zero_only,
+                })
+            if rules:
+                return rules
         except Exception as e:
-            print(f"[IBC season_config Load Warning] {e}")
-
-    return {
-        "rate_map": rate_map,
-        "types": sorted(types_set),
-        "meter_types": sorted(meter_types_set),
-    }
+            print(f"[IBC Custom Exceptions Warning] {e}")
+    return load_ccb_exceptions()
