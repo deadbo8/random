@@ -1,45 +1,12 @@
-from controller.ibc.ibc_db import (
-    BILL_TABLE_REGISTRY,
-    BSEG_TABLE_REGISTRY,
-    TABLE_DISPLAY_ORDER,
-    TABLE_FUNCTIONAL_NAMES,
-    DEFAULT_SELECTED_TABLES,
-    IBCDataFetcher,
-    norm_bill_id,
-    norm_bseg_id,
-    norm_sa_id,
-    make_bill_hash,
-    make_bseg_hash,
-)
-
-from controller.compare_bill import load_ccb_exceptions, is_exception_match
-
-
-def get_custom_exceptions_path(base_dir: str) -> str:
-    return os.path.join(base_dir, "storage", "ibc_custom_exceptions.xlsx")
-
-
-def load_ibc_exceptions(base_dir: str) -> list[dict]:
-    """Loads user-configured exception rules if uploaded, otherwise default CC&B exceptions."""
-    custom_path = get_custom_exceptions_path(base_dir)
-    if os.path.exists(custom_path):
-        try:
-            df = pd.read_excel(custom_path, dtype=str).fillna("")
-            rules = []
-            for _, row in df.iterrows():
-                pat = str(row.get("Pattern", "") or row.get("pattern", "")).strip().lower()
-                if not pat:
-                    continue
-                m_type = str(row.get("Match_Type", "") or row.get("match_type", "CONTAINS")).strip().upper()
-                z_raw = str(row.get("Zero_Only", "") or row.get("zero_only", "TRUE")).strip().lower()
-                zero_only = z_raw in ("true", "1", "yes", "y")
-                rules.append({
-                    "pattern": pat,
-                    "match_type": m_type if m_type in ("EXACT", "WILDCARD", "CONTAINS") else "CONTAINS",
-                    "zero_only": zero_only,
-                })
-            if rules:
-                return rules
-        except Exception as e:
-            print(f"[IBC Custom Exceptions Warning] {e}")
-    return load_ccb_exceptions()
+f_tstats = {}
+      for tbl in TABLE_DISPLAY_ORDER:
+          if tbl in active_bill:
+              f_tstats[tbl] = {
+                  "match": sum(r.get(f"{tbl}_match", 0) for r in f_bill_summary),
+                  "mismatch": sum(r.get(f"{tbl}_mismatch", 0) for r in f_bill_summary),
+              }
+          elif tbl in active_bseg:
+              f_tstats[tbl] = {
+                  "match": sum(r.get(f"{tbl}_match", 0) for r in f_bseg_summary),
+                  "mismatch": sum(r.get(f"{tbl}_mismatch", 0) for r in f_bseg_summary),
+              }
