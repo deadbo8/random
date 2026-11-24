@@ -1,12 +1,115 @@
-f_tstats = {}
-      for tbl in TABLE_DISPLAY_ORDER:
-          if tbl in active_bill:
-              f_tstats[tbl] = {
-                  "match": sum(r.get(f"{tbl}_match", 0) for r in f_bill_summary),
-                  "mismatch": sum(r.get(f"{tbl}_mismatch", 0) for r in f_bill_summary),
-              }
-          elif tbl in active_bseg:
-              f_tstats[tbl] = {
-                  "match": sum(r.get(f"{tbl}_match", 0) for r in f_bseg_summary),
-                  "mismatch": sum(r.get(f"{tbl}_mismatch", 0) for r in f_bseg_summary),
-              }
+BILL_TABLE_REGISTRY = {
+    "CI_BILL_MSGS": {
+        "order": 6,
+        "functional_name": "Bill Msgs",
+        "default_selected": False,
+        "id_col": "BILL_ID",
+        "ignore_cols": {"BILL_ID", "SEQNO"},
+        "align_keys": ["BILL_MSG_CD"],
+        "check_25_4": False,
+        "description": "Bill-Level Customer Messages"
+    }
+}
+
+BSEG_TABLE_REGISTRY = {
+    "CI_BSEG_CALC": {
+        "order": 1,
+        "functional_name": "Bseg Headers",
+        "default_selected": True,
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "HEADER_SEQ"},
+        "align_keys": ["RS_CD"],
+        "check_25_4": False,
+        "description": "Bill Segment Header Rate Schedule & Calc Totals"
+    },
+    "CI_BSEG_READ": {
+        "order": 2,
+        "functional_name": "Reads",
+        "default_selected": True,
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO"},
+        "align_keys": ["SP_ID", "UOM_CD", "TOU_CD"],
+        "check_25_4": False,
+        "description": "Meter Register Readings & Usage Quantities"
+    },
+    "CI_BSEG_SQ": {
+        "order": 3,
+        "functional_name": "SQIs",
+        "default_selected": True,
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO"},
+        "align_keys": ["UOM_CD", "TOU_CD", "SQI_CD"],
+        "check_25_4": False,
+        "description": "Service Quantities (ALLKWH, BILLDAYS, Baseline)"
+    },
+    "CI_BSEG_CALC_LN": {
+        "order": 4,
+        "functional_name": "Calc Lines",
+        "default_selected": True,
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO", "RC_SEQ"},
+        "align_keys": ["HEADER_SEQ", "RC_SEQ"],
+        "check_25_4": True,
+        "description": "Granular Rate Component Calculation Lines"
+    },
+    "CI_FT_GL": {
+        "order": 5,
+        "functional_name": "Financials",
+        "default_selected": True,
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "GL_SEQ_NBR"},
+        "align_keys": ["DST_ID", "CHAR_TYPE_CD", "CHAR_VAL", "GL_ACCT"],
+        "check_25_4": False,
+        "description": "Financial Transaction General Ledger Lines",
+        "custom_sql": """
+            SELECT ft.SIBLING_ID AS BSEG_ID,
+                   gl.GL_SEQ_NBR, gl.DST_ID, gl.CHAR_TYPE_CD, gl.AMOUNT,
+                   gl.CHAR_VAL, gl.TOT_AMT_SW, gl.STATISTIC_AMOUNT, gl.GL_ACCT
+            FROM {schema}.CI_FT_GL gl
+            INNER JOIN {schema}.CI_FT ft ON gl.FT_ID = ft.FT_ID
+            WHERE ft.SIBLING_ID IN ({binds})
+              AND ft.FT_TYPE_FLG = 'BS'
+        """
+    },
+    "CI_BSEG_MSG": {
+        "order": 7,
+        "functional_name": "Bseg Msgs",
+        "default_selected": False,
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO"},
+        "align_keys": ["BILL_MSG_CD"],
+        "check_25_4": False,
+        "description": "Segment-Level Billing Messages"
+    }
+}
+
+def get_ordered_table_meta(scope: str = "bill_and_bseg") -> list[dict]:
+    """Returns all registered tables sorted in exact sequence 1-7 with functional names."""
+    items = []
+    for k, v in BSEG_TABLE_REGISTRY.items():
+        items.append({"table": k, "functional_name": v["functional_name"], "order": v["order"], "default_selected": v["default_selected"], "level": "BSEG"})
+    if scope == "bill_and_bseg":
+        for k, v in BILL_TABLE_REGISTRY.items():
+            items.append({"table": k, "functional_name": v["functional_name"], "order": v["order"], "default_selected": v["default_selected"], "level": "BILL"})
+    return sorted(items, key=lambda x: x["order"])
+
+def load_rate_categories(base_dir: str) -> dict:
+    """Reads Type & Meter Type per Rate Schedule from storage/db_storage.xlsx -> season_config."""
+    import os
+    path = os.path.join(base_dir, "storage", "db_storage.xlsx")
+    mapping = {}
+    if not os.path.exists(path):
+        return mapping
+    try:
+        df = pd.read_excel(path, sheet_name="season_config")
+        df.columns = [str(c).strip() for c in df.columns]
+        for _, r in df.iterrows():
+            rs = str(r.get("Rate Schedule", "") or "").strip().upper()
+            if rs and rs != "NAN":
+                mapping[rs] = {
+                    "type": str(r.get("Type", "") or "").strip() or "Other",
+                    "meter_type": str(r.get("Meter Type", "") or "").strip() or "Other"
+                }
+    except Exception as e:
+        print(f"[IBC season_config Warning] {e}")
+    return mapping
