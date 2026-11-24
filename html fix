@@ -1,15 +1,21 @@
-<!-- Dedicated Filters for Rate Breakdown Chart (Type & Meter Type from db_storage.xlsx -> season_config) -->
-<div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; background: #f8fafc; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 4px;">
-    <select id="ibcRateCatTypeFilter" onchange="renderIbcRateBreakdown()" style="padding: 5px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 12px; color: #1a202c; background: #fff;">
-        <option value="ALL">All Types (season_config)</option>
-    </select>
-    <select id="ibcRateCatMeterFilter" onchange="renderIbcRateBreakdown()" style="padding: 5px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 12px; color: #1a202c; background: #fff;">
-        <option value="ALL">All Meter Types (season_config)</option>
-    </select>
-    <select id="ibcRateOwnRateFilter" onchange="renderIbcRateBreakdown()" style="padding: 5px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 12px; color: #1a202c; background: #fff;">
-        <option value="ALL">All Rates</option>
-    </select>
-    <button type="button" onclick="resetIbcRateSectionFilters()" style="padding: 5px 10px; background: #64748b; color: #fff; border: none; border-radius: 4px; font-size: 11.5px; font-weight: 600; cursor: pointer;">
-        ↺ Reset Chart Filter
-    </button>
-</div>
+let _ibcTableMetaMap = {};      // technical_name -> {functional_name, order, default_selected, level}
+ let _ibcRateCategories = {};    // RATE_CD -> {type, meter_type}
+
+ function getIbcFuncName(tbl) {
+     return (_ibcTableMetaMap[tbl] && _ibcTableMetaMap[tbl].functional_name) || tbl;
+ }
+
+ async function uploadIbcExceptionsFile(inputEl) {
+     if (!inputEl.files || !inputEl.files[0]) return;
+     const fd = new FormData();
+     fd.append("exceptionsFile", inputEl.files[0]);
+     try {
+         const res = await fetch("/api/ibc/exceptions/upload", { method: "POST", body: fd });
+         const d = await res.json();
+         alert(res.ok ? d.message : `Upload failed: ${d.error}`);
+     } catch (e) {
+         alert("Upload error: " + e.message);
+     }
+     inputEl.value = "";
+ }
+ window.uploadIbcExceptionsFile = uploadIbcExceptionsFile;
