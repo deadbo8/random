@@ -1,90 +1,103 @@
-function renderIbcRateBreakdown() {
-        if (!_ibcJobData) return;
-        const tbody = document.getElementById("ibcRateBreakdownTbody");
-        const ctxEl = document.getElementById("ibcRateBreakdownContext");
-        if (!tbody) return;
+function initIbcDashboard(data) {
+        const dash = document.getElementById("ibcDashboardArea");
+        if (dash) dash.style.display = "block";
+        const insp = document.getElementById("ibcDrilldownInspector");
+        if (insp) insp.style.display = "none";
 
-        const catType = document.getElementById("ibcRateCatTypeFilter")?.value || "ALL";
-        const catMeter = document.getElementById("ibcRateCatMeterFilter")?.value || "ALL";
-        const ownRate = document.getElementById("ibcRateOwnRateFilter")?.value || "ALL";
-        const allBsegs = _ibcJobData.bseg_summary || [];
-
-        const filtered = allBsegs.filter(r => {
-            const rc = (r.Rate_cd || "").toUpperCase();
-            const cat = _ibcRateCategories[rc] || { type: "Other", meter_type: "Other" };
-            const matchBill = _ibcActiveBillHash === "ALL" || r.bill_pair_hash === _ibcActiveBillHash;
-            const matchType = catType === "ALL" || cat.type === catType;
-            const matchMeter = catMeter === "ALL" || cat.meter_type === catMeter;
-            const matchRate = ownRate === "ALL" || rc === ownRate;
-            return matchBill && matchType && matchMeter && matchRate;
-        });
-
-        if (ctxEl) {
-            const billLbl = _ibcActiveBillHash === "ALL"
-                ? "All Bills"
-                : `Bill: ${document.getElementById("ibcHashFilterText")?.textContent || _ibcActiveBillHash}`;
-            const parts = [billLbl];
-            if (catType !== "ALL") parts.push(`Type: ${catType}`);
-            if (catMeter !== "ALL") parts.push(`Meter: ${catMeter}`);
-            if (ownRate !== "ALL") parts.push(`Rate: ${ownRate}`);
-            ctxEl.textContent = `(${parts.join(" • ")})`;
+        // 1. Skipped Invalid / Missing Pairs Banner
+        const skipBanner = document.getElementById("ibcSkippedBanner");
+        const skipList = document.getElementById("ibcSkippedList");
+        const skipped = data.skipped_invalid || [];
+        if (skipBanner && skipList) {
+            if (skipped.length > 0) {
+                const cntEl = document.getElementById("ibcSkippedCount");
+                if (cntEl) cntEl.textContent = skipped.length;
+                skipList.innerHTML = skipped.map(s =>
+                    `<li><strong>Row ${s.row_num}</strong> (${s.new_id} vs ${s.old_id}): ${s.reason}</li>`
+                ).join("");
+                skipList.style.display = "none";
+                skipBanner.style.display = "block";
+            } else {
+                skipBanner.style.display = "none";
+            }
         }
 
-        const byRate = {};
-        filtered.forEach(r => {
-            const rc = r.Rate_cd || "-";
-            if (!byRate[rc]) byRate[rc] = { matched: 0, mismatched: 0 };
-            const mm = r._filtered_mismatch !== undefined ? r._filtered_mismatch : (r.Total_row_validated_mismatch || 0);
-            if (mm === 0) byRate[rc].matched++;
-            else byRate[rc].mismatched++;
-        });
+        const bsegs = data.bseg_summary || [];
+        const bills = data.bill_summary || [];
 
-        const rateKeys = Object.keys(byRate).sort();
-        if (rateKeys.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6" style="padding: 14px; text-align: center; color: #64748b;">No Bill Segments match the selected Type / Meter / Rate filter.</td></tr>`;
-            return;
+        // 2. Populate Main Rate Schedule Filter
+        const rateSelect = document.getElementById("ibcRateFilter");
+        if (rateSelect) {
+            const uniqueRates = Array.from(new Set(bsegs.map(r => r.Rate_cd).filter(Boolean))).sort();
+            rateSelect.innerHTML = `<option value="ALL">All Rates (${uniqueRates.length})</option>` +
+                uniqueRates.map(r => `<option value="${r}">${r}</option>`).join("");
         }
 
-        tbody.innerHTML = rateKeys.map(rc => {
-            const m = byRate[rc].matched;
-            const mm = byRate[rc].mismatched;
-            const tot = m + mm;
-            const mPct = ((m / tot) * 100).toFixed(1);
-            const mmPct = ((mm / tot) * 100).toFixed(1);
-            const cat = _ibcRateCategories[rc.toUpperCase()] || { type: "Other", meter_type: "Other" };
+        // 3. Build tStats FIRST (before reading Object.keys(tStats))
+        let tStats = data.table_chart_stats || {};
+        if (Object.keys(tStats).length === 0) {
+            if (data.scope !== "bseg_only" && bills.length) {
+                tStats["CI_BILL_MSGS"] = {
+                    match: bills.reduce((a, r) => a + (r.CI_BILL_MSGS_match || 0), 0),
+                    mismatch: bills.reduce((a, r) => a + (r.CI_BILL_MSGS_mismatch || 0), 0)
+                };
+            }
+            ["CI_BSEG_CALC", "CI_BSEG_READ", "CI_BSEG_SQ", "CI_BSEG_CALC_LN", "CI_FT_GL", "CI_BSEG_MSG"].forEach(t => {
+                tStats[t] = {
+                    match: bsegs.reduce((a, r) => a + (r[`${t}_match`] || 0), 0),
+                    mismatch: bsegs.reduce((a, r) => a + (r[`${t}_mismatch`] || 0), 0)
+                };
+            });
+        }
 
-            const tipM = `<b>Rate: ${rc}</b> (${cat.type} / Meter ${cat.meter_type})<br>🟢 Matched BSEGs: ${m} / ${tot} (${mPct}%)`;
-            const tipMM = `<b>Rate: ${rc}</b> (${cat.type} / Meter ${cat.meter_type})<br>🔴 Mismatched BSEGs: ${mm} / ${tot} (${mmPct}%)`;
+        // 4. Load Functional Metadata (Order 1-7) & Default Select 1-5
+        _ibcTableMetaMap = {};
+        (data.table_meta || []).forEach(m => { _ibcTableMetaMap[m.table] = m; });
+        _ibcRateCategories = data.rate_categories || {};
 
-            return `
-                <tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 8px 10px; font-weight: 700; color: #003366;">${rc}</td>
-                    <td style="padding: 8px 10px; text-align: center; font-weight: 600;">${tot}</td>
-                    <td style="padding: 8px 10px; text-align: center; font-weight: 700; color: #16a34a;">${m}</td>
-                    <td style="padding: 8px 10px; text-align: center; font-weight: 700; color: ${mm > 0 ? '#dc2626' : '#94a3b8'};">${mm}</td>
-                    <td style="padding: 8px 10px; text-align: center; font-weight: 700; color: #1e293b;">${mPct}%</td>
-                    <td style="padding: 8px 10px;">
-                        <div style="display: flex; width: 100%; height: 22px; background: #e2e8f0; border-radius: 4px; overflow: hidden;">
-                            ${m > 0 ? `<div style="width: ${mPct}%; background: #16a34a; color: #fff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; cursor: pointer;"
-                                onmouseover="this.style.opacity='0.8'; showIbcTooltip(event, '${tipM}')"
-                                onmousemove="showIbcTooltip(event, '${tipM}')"
-                                onmouseout="this.style.opacity='1'; hideIbcTooltip()">${parseFloat(mPct) >= 12 ? m : ''}</div>` : ''}
-                            ${mm > 0 ? `<div style="width: ${mmPct}%; background: #dc2626; color: #fff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; cursor: pointer;"
-                                onmouseover="this.style.opacity='0.8'; showIbcTooltip(event, '${tipMM}')"
-                                onmousemove="showIbcTooltip(event, '${tipMM}')"
-                                onmouseout="this.style.opacity='1'; hideIbcTooltip()">${parseFloat(mmPct) >= 12 ? mm : ''}</div>` : ''}
-                        </div>
-                    </td>
-                </tr>
-            `;
-        }).join("");
-    }
+        _ibcAllJobTables = Object.keys(tStats).sort((a, b) =>
+            ((_ibcTableMetaMap[a]?.order) || 99) - ((_ibcTableMetaMap[b]?.order) || 99)
+        );
+        const defaultActive = _ibcAllJobTables.filter(t => _ibcTableMetaMap[t] ? _ibcTableMetaMap[t].default_selected : true);
+        _ibcSelectedTables = new Set(defaultActive.length ? defaultActive : _ibcAllJobTables);
 
-    function resetIbcRateSectionFilters() {
-        ["ibcRateCatTypeFilter", "ibcRateCatMeterFilter", "ibcRateOwnRateFilter"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.value = "ALL";
+        // 5. Populate Rate Breakdown Section's Own Filters (Type & Meter Type from season_config)
+        const typesSet = new Set(), metersSet = new Set(), ownRatesSet = new Set();
+        bsegs.forEach(b => {
+            const rc = (b.Rate_cd || "").toUpperCase();
+            if (rc && rc !== "-") ownRatesSet.add(rc);
+            const cat = _ibcRateCategories[rc];
+            typesSet.add(cat ? cat.type : "Other");
+            metersSet.add(cat ? cat.meter_type : "Other");
         });
-        renderIbcRateBreakdown();
+        const tSel = document.getElementById("ibcRateCatTypeFilter");
+        if (tSel) tSel.innerHTML = `<option value="ALL">All Types</option>` + Array.from(typesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
+        const mSel = document.getElementById("ibcRateCatMeterFilter");
+        if (mSel) mSel.innerHTML = `<option value="ALL">All Meter Types</option>` + Array.from(metersSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
+        const rSel = document.getElementById("ibcRateOwnRateFilter");
+        if (rSel) rSel.innerHTML = `<option value="ALL">All Rates</option>` + Array.from(ownRatesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
+
+        // 6. Collapse Rate Breakdown by Default
+        const rbBody = document.getElementById("ibcRateBreakdownBody");
+        const rbBtn = document.getElementById("ibcRateCollapseBtn");
+        if (rbBody) rbBody.style.display = "none";
+        if (rbBtn) rbBtn.textContent = "▶ Expand";
+
+        // 7. Scope-Aware Tabs & Overall Pie Toggle
+        const billTabBtn = document.getElementById("tabBtnBillLevel");
+        const pieBillBtn = document.getElementById("pieBtnBill");
+        if (data.scope === "bseg_only") {
+            if (billTabBtn) billTabBtn.style.display = "none";
+            if (pieBillBtn) pieBillBtn.style.display = "none";
+            _ibcOverallPieMode = "bseg";
+            switchIbcTableTab("bseg");
+        } else {
+            if (billTabBtn) billTabBtn.style.display = "inline-block";
+            if (pieBillBtn) pieBillBtn.style.display = "inline-block";
+            switchIbcTableTab("bill");
+        }
+
+        // 8. Render Ribbons, KPIs, All 3 Pie Charts, Bar Chart, Rate Breakdown & Tables
+        renderIbcTableRibbons();
+        applyIbcRibbonFilterToDashboard();
     }
-    window.resetIbcRateSectionFilters = resetIbcRateSectionFilters;
