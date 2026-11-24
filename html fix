@@ -1,121 +1,164 @@
-if (inputMode === "single") {
-         if (!/^\d{1,12}$/.test(newId) || !/^\d{1,12}$/.test(oldId) || /^0+$/.test(newId) || /^0+$/.test(oldId)) {
-             alert("Invalid ID: Please enter valid numeric Bill / BSEG IDs (1–12 digits, not all zeros).");
-             return;
-         }
-         if (newId.padStart(12, "0") === oldId.padStart(12, "0")) {
-             alert("Same ID Error: New ID and Cancelled ID cannot be identical. Please enter two different IDs to compare.");
-             return;
-         }
-     }
+import os
+import hashlib
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pandas as pd
+import time
+
+import controller.charge_utils
+from controller.db_fetch import get_connection, FETCH_DB_ENV
+
+# ------------------- FUNCTIONAL NAMES & SEQUENCE (1 to 7) ------------------- #
+TABLE_DISPLAY_ORDER = [
+    "CI_BSEG_CALC",     # 1. Bseg Headers
+    "CI_BSEG_READ",     # 2. Reads
+    "CI_BSEG_SQ",       # 3. SQIs
+    "CI_BSEG_CALC_LN",  # 4. Calc Lines
+    "CI_FT_GL",         # 5. Financials
+    "CI_BILL_MSGS",     # 6. Bill Msgs
+    "CI_BSEG_MSG",      # 7. Bseg Msgs
+]
+
+TABLE_FUNCTIONAL_NAMES = {
+    "CI_BSEG_CALC": "Bseg Headers",
+    "CI_BSEG_READ": "Reads",
+    "CI_BSEG_SQ": "SQIs",
+    "CI_BSEG_CALC_LN": "Calc Lines",
+    "CI_FT_GL": "Financials",
+    "CI_BILL_MSGS": "Bill Msgs",
+    "CI_BSEG_MSG": "Bseg Msgs",
+}
+
+# By default, only tables 1-5 are selected
+DEFAULT_SELECTED_TABLES = [
+    "CI_BSEG_CALC",
+    "CI_BSEG_READ",
+    "CI_BSEG_SQ",
+    "CI_BSEG_CALC_LN",
+    "CI_FT_GL",
+]
+
+# ------------------- TABLE REGISTRY ------------------- #
+BILL_TABLE_REGISTRY = {
+    "CI_BILL_MSGS": {
+        "id_col": "BILL_ID",
+        "ignore_cols": {"BILL_ID", "SEQNO"},
+        "align_keys": ["BILL_MSG_CD"],
+        "check_25_4": False,
+        "functional_name": "Bill Msgs",
+        "description": "Bill Level Messages",
+    }
+}
+
+BSEG_TABLE_REGISTRY = {
+    "CI_BSEG_CALC": {
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "HEADER_SEQ"},
+        "align_keys": ["RS_CD"],
+        "check_25_4": False,
+        "functional_name": "Bseg Headers",
+        "description": "Bseg Headers",
+    },
+    "CI_BSEG_READ": {
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO"},
+        "align_keys": ["SP_ID", "UOM_CD", "TOU_CD"],
+        "check_25_4": False,
+        "functional_name": "Reads",
+        "description": "Reads",
+    },
+    "CI_BSEG_SQ": {
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO"},
+        "align_keys": ["UOM_CD", "TOU_CD", "SQI_CD"],
+        "check_25_4": False,
+        "functional_name": "SQIs",
+        "description": "SQIs",
+    },
+    "CI_BSEG_CALC_LN": {
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO", "RC_SEQ"},
+        "align_keys": ["HEADER_SEQ", "RC_SEQ"],
+        "check_25_4": True,
+        "functional_name": "Calc Lines",
+        "description": "Calc Lines",
+    },
+    "CI_FT_GL": {
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "GL_SEQ_NBR"},
+        "align_keys": ["DST_ID", "CHAR_TYPE_CD", "CHAR_VAL", "GL_ACCT"],
+        "check_25_4": False,
+        "functional_name": "Financials",
+        "description": "Financials",
+        "custom_sql": """
+            SELECT ft.SIBLING_ID as BSEG_ID,
+                   gl.GL_SEQ_NBR,
+                   gl.DST_ID,
+                   gl.CHAR_TYPE_CD,
+                   gl.AMOUNT,
+                   gl.CHAR_VAL,
+                   gl.TOT_AMT_SW,
+                   gl.STATISTIC_AMOUNT,
+                   gl.GL_ACCT
+            FROM {schema}.CI_FT_GL gl
+            INNER JOIN {schema}.CI_FT ft ON gl.FT_ID = ft.FT_ID
+            WHERE ft.SIBLING_ID IN ({binds})
+              AND ft.FT_TYPE_FLG = 'BS'
+        """,
+    },
+    "CI_BSEG_MSG": {
+        "id_col": "BSEG_ID",
+        "ignore_cols": {"BSEG_ID", "SEQNO"},
+        "align_keys": ["BILL_MSG_CD"],
+        "check_25_4": False,
+        "functional_name": "Bseg Msgs",
+        "description": "Bseg Msgs",
+    },
+}
 
 
+def load_season_config_metadata(base_dir: str) -> dict:
+    """
+    Loads Rate Schedule -> Type (Category) and Meter Type mapping
+    from storage/db_storage.xlsx (sheet: season_config).
+    """
+    xlsx_path = os.path.join(base_dir, "storage", "db_storage.xlsx")
+    rate_map = {}
+    types_set = set()
+    meter_types_set = set()
 
+    if os.path.exists(xlsx_path):
+        try:
+            df = pd.read_excel(xlsx_path, sheet_name="season_config", dtype=str)
+            col_map = {str(c).strip().lower(): c for c in df.columns}
+            type_col = col_map.get("type")
+            rate_col = col_map.get("rate schedule") or col_map.get("rate_schedule")
+            meter_col = col_map.get("meter type") or col_map.get("meter_type")
 
+            for _, row in df.iterrows():
+                r_cd = str(row.get(rate_col, "") or "").strip().upper() if rate_col else ""
+                if not r_cd or r_cd == "NAN":
+                    continue
+                t_val = str(row.get(type_col, "") or "").strip() if type_col else ""
+                m_val = str(row.get(meter_col, "") or "").strip().upper() if meter_col else ""
+                if t_val.lower() == "nan":
+                    t_val = ""
+                if m_val.lower() == "nan":
+                    m_val = ""
 
-const skipBanner = document.getElementById("ibcSkippedBanner");
-     const skipList = document.getElementById("ibcSkippedList");
-     const skipped = data.skipped_invalid || [];
-     if (skipBanner && skipList) {
-         if (skipped.length > 0) {
-             document.getElementById("ibcSkippedCount").textContent = skipped.length;
-             skipList.innerHTML = skipped.map(s =>
-                 `<li><strong>Row ${s.row_num}</strong> (${s.new_id} vs ${s.old_id}): ${s.reason}</li>`
-             ).join("");
-             skipList.style.display = "none";
-             skipBanner.style.display = "block";
-         } else {
-             skipBanner.style.display = "none";
-         }
-     }
+                rate_map[r_cd] = {
+                    "type": t_val or "Other",
+                    "meter_type": m_val or "-",
+                }
+                if t_val:
+                    types_set.add(t_val)
+                if m_val:
+                    meter_types_set.add(m_val)
+        except Exception as e:
+            print(f"[IBC season_config Load Warning] {e}")
 
-
-
-
-
-
-function toggleIbcRateBreakdown() {
-     const body = document.getElementById("ibcRateBreakdownBody");
-     const btn = document.getElementById("ibcRateCollapseBtn");
-     if (!body || !btn) return;
-     const isHidden = body.style.display === "none";
-     body.style.display = isHidden ? "block" : "none";
-     btn.textContent = isHidden ? "▼ Collapse" : "▶ Expand";
- }
-
- function renderIbcRateBreakdown() {
-     if (!_ibcJobData) return;
-     const tbody = document.getElementById("ibcRateBreakdownTbody");
-     const ctxEl = document.getElementById("ibcRateBreakdownContext");
-     if (!tbody) return;
-
-     const rateFilter = document.getElementById("ibcRateFilter") ? document.getElementById("ibcRateFilter").value : "ALL";
-     const allBsegs = _ibcJobData.bseg_summary || [];
-
-     // Filter dynamically by active Bill Filter AND Rate Schedule Filter
-     const filtered = allBsegs.filter(r => {
-         const matchBill = _ibcActiveBillHash === "ALL" || r.bill_pair_hash === _ibcActiveBillHash;
-         const matchRate = rateFilter === "ALL" || r.Rate_cd === rateFilter;
-         return matchBill && matchRate;
-     });
-
-     // Update header context label
-     if (ctxEl) {
-         const billLbl = _ibcActiveBillHash === "ALL"
-             ? "All Bills"
-             : `Bill: ${document.getElementById("ibcHashFilterText")?.textContent || _ibcActiveBillHash}`;
-         const rateLbl = rateFilter === "ALL" ? "All Rates" : `Rate: ${rateFilter}`;
-         ctxEl.textContent = `(${billLbl} • ${rateLbl})`;
-     }
-
-     // Group BSEG pass/fail counts by Rate_cd (respecting active Table Filter Ribbons via _filtered_mismatch)
-     const byRate = {};
-     filtered.forEach(r => {
-         const rc = r.Rate_cd || "-";
-         if (!byRate[rc]) byRate[rc] = { matched: 0, mismatched: 0 };
-         const mm = r._filtered_mismatch !== undefined ? r._filtered_mismatch : (r.Total_row_validated_mismatch || 0);
-         if (mm === 0) byRate[rc].matched++;
-         else byRate[rc].mismatched++;
-     });
-
-     const rateKeys = Object.keys(byRate).sort();
-     if (rateKeys.length === 0) {
-         tbody.innerHTML = `<tr><td colspan="6" style="padding: 14px; text-align: center; color: #64748b;">No Bill Segments match the current Bill / Rate filter.</td></tr>`;
-         return;
-     }
-
-     tbody.innerHTML = rateKeys.map(rc => {
-         const m = byRate[rc].matched;
-         const mm = byRate[rc].mismatched;
-         const tot = m + mm;
-         const mPct = ((m / tot) * 100).toFixed(1);
-         const mmPct = ((mm / tot) * 100).toFixed(1);
-
-         const tipM = `<b>Rate: ${rc}</b><br>🟢 Matched BSEGs: ${m} / ${tot} (${mPct}%)`;
-         const tipMM = `<b>Rate: ${rc}</b><br>🔴 Mismatched BSEGs: ${mm} / ${tot} (${mmPct}%)`;
-
-         return `
-             <tr style="border-bottom: 1px solid #e2e8f0;">
-                 <td style="padding: 8px 10px; font-weight: 700; color: #003366;">${rc}</td>
-                 <td style="padding: 8px 10px; text-align: center; font-weight: 600;">${tot}</td>
-                 <td style="padding: 8px 10px; text-align: center; font-weight: 700; color: #16a34a;">${m}</td>
-                 <td style="padding: 8px 10px; text-align: center; font-weight: 700; color: ${mm > 0 ? '#dc2626' : '#94a3b8'};">${mm}</td>
-                 <td style="padding: 8px 10px; text-align: center; font-weight: 700; color: #1e293b;">${mPct}%</td>
-                 <td style="padding: 8px 10px;">
-                     <div style="display: flex; width: 100%; height: 22px; background: #e2e8f0; border-radius: 4px; overflow: hidden;">
-                         ${m > 0 ? `<div style="width: ${mPct}%; background: #16a34a; color: #fff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: opacity 0.15s;"
-                             onmouseover="this.style.opacity='0.8'; showIbcTooltip(event, '${tipM}')"
-                             onmousemove="showIbcTooltip(event, '${tipM}')"
-                             onmouseout="this.style.opacity='1'; hideIbcTooltip()">${parseFloat(mPct) >= 12 ? m : ''}</div>` : ''}
-                         ${mm > 0 ? `<div style="width: ${mmPct}%; background: #dc2626; color: #fff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: opacity 0.15s;"
-                             onmouseover="this.style.opacity='0.8'; showIbcTooltip(event, '${tipMM}')"
-                             onmousemove="showIbcTooltip(event, '${tipMM}')"
-                             onmouseout="this.style.opacity='1'; hideIbcTooltip()">${parseFloat(mmPct) >= 12 ? mm : ''}</div>` : ''}
-                     </div>
-                 </td>
-             </tr>
-         `;
-     }).join("");
- }
-
- window.toggleIbcRateBreakdown = toggleIbcRateBreakdown;
+    return {
+        "rate_map": rate_map,
+        "types": sorted(types_set),
+        "meter_types": sorted(meter_types_set),
+    }
