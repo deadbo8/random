@@ -1,35 +1,11 @@
-_ibcTableMetaMap = {};
-   (data.table_meta || []).forEach(m => { _ibcTableMetaMap[m.table] = m; });
-   _ibcRateCategories = data.rate_categories || {};
-
-   _ibcAllJobTables = Object.keys(tStats).sort((a, b) =>
-       ((_ibcTableMetaMap[a]?.order) || 99) - ((_ibcTableMetaMap[b]?.order) || 99)
-   );
-   // By default, select only tables 1-5 (Bseg Headers, Reads, SQIs, Calc Lines, Financials)
-   const defaultActive = _ibcAllJobTables.filter(t => _ibcTableMetaMap[t] ? _ibcTableMetaMap[t].default_selected : true);
-   _ibcSelectedTables = new Set(defaultActive.length ? defaultActive : _ibcAllJobTables);
-
-   // Populate Rate Breakdown's own Type, Meter Type & Rate dropdowns from season_config
-   const typesSet = new Set(), metersSet = new Set(), ownRatesSet = new Set();
-   bsegs.forEach(b => {
-       const rc = (b.Rate_cd || "").toUpperCase();
-       if (rc && rc !== "-") ownRatesSet.add(rc);
-       const cat = _ibcRateCategories[rc];
-       typesSet.add(cat ? cat.type : "Other");
-       metersSet.add(cat ? cat.meter_type : "Other");
-   });
-   const tSel = document.getElementById("ibcRateCatTypeFilter");
-   if (tSel) tSel.innerHTML = `<option value="ALL">All Types</option>` + Array.from(typesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
-   const mSel = document.getElementById("ibcRateCatMeterFilter");
-   if (mSel) mSel.innerHTML = `<option value="ALL">All Meter Types</option>` + Array.from(metersSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
-   const rSel = document.getElementById("ibcRateOwnRateFilter");
-   if (rSel) rSel.innerHTML = `<option value="ALL">All Rates</option>` + Array.from(ownRatesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
-
-   // Ensure Rate Breakdown starts collapsed by default
-   const rbBody = document.getElementById("ibcRateBreakdownBody");
-   const rbBtn = document.getElementById("ibcRateCollapseBtn");
-   if (rbBody) rbBody.style.display = "none";
-   if (rbBtn) rbBtn.textContent = "▶ Expand";
-
-   renderIbcTableRibbons();
-   applyIbcRibbonFilterToDashboard();
+const fName = getIbcFuncName(tbl);
+return `
+    <button type="button" onclick="toggleIbcRibbon('${tbl}')"
+        onmouseover="showIbcTooltip(event, '<b>${fName}</b><br>Technical Table: ${tbl}')"
+        onmousemove="showIbcTooltip(event, '<b>${fName}</b><br>Technical Table: ${tbl}')"
+        onmouseout="hideIbcTooltip()"
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 20px; border: 1.5px solid ${border}; background: ${bg}; color: ${color}; font-size: 11.5px; font-weight: 600; cursor: pointer;">
+        <span>${isActive ? "✓" : "+"}</span>
+        <span>${fName}</span>
+    </button>
+`;
