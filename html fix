@@ -1,50 +1,123 @@
-function _buildTwoSlicePieSvg(matched, mismatched, unitLabel, subLblText = "Pass Rate", extraTip = "") {
-        const total = matched + mismatched;
-        const r = 88, cx = 120, cy = 125, sw = 34, circ = 2 * Math.PI * r;
-        const extraHtml = extraTip ? `<br><small style=color:#93c5fd>${String(extraTip).replace(/'/g, "")}</small>` : "";
+function drawIbcChartsByScope() {
+        const sqBox = document.getElementById("ibcSqPieBox");
+        const lnBox = document.getElementById("ibcCalcLnPieBox");
+        const ovBox = document.getElementById("ibcOverallChartBox");
+        const barBox = document.getElementById("ibcTableBarChartBox");
 
-        if (total === 0) {
-            return `<svg viewBox="0 0 420 250" width="100%" height="260">
-                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="${sw}"/>
-                <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="16" font-weight="700" fill="#94a3b8">No Data</text>
-                <text x="255" y="${cy + 4}" font-size="14" font-weight="600" fill="#64748b">0 ${unitLabel} (Excluded)</text>
-            </svg>`;
+        // Build hover context listing active ribbon criteria + technical table names
+        const activeList = Array.from(_ibcSelectedTables).map(t => `${getIbcFuncName(t)} (${t})`).join(", ");
+        const criteriaTip = `Based on selected criteria: ${activeList}`;
+
+        // 1. PIE 1 (Left): Overall Bill/BSeg Pass %
+        if (ovBox) {
+            if (_ibcOverallPieMode === "bill" && _ibcJobData && _ibcJobData.scope !== "bseg_only") {
+                const bills = _ibcJobData.bill_summary || [];
+                let bPass = 0, bFail = 0;
+                bills.forEach(bi => {
+                    const mm = bi._filtered_mismatch !== undefined ? bi._filtered_mismatch : (bi.Total_row_validated_mismatch || 0);
+                    if (mm === 0) bPass++;
+                    else bFail++;
+                });
+                ovBox.innerHTML = _buildTwoSlicePieSvg(bPass, bFail, "Bills", "Bills Passed", criteriaTip);
+            } else {
+                const bsegs = (_ibcJobData && _ibcJobData.bseg_summary) ? _ibcJobData.bseg_summary : [];
+                let bsegMatch = 0, bsegMismatch = 0;
+                bsegs.forEach(b => {
+                    const mm = b._filtered_mismatch !== undefined ? b._filtered_mismatch : (b.Total_row_validated_mismatch || 0);
+                    if (mm === 0) bsegMatch++;
+                    else bsegMismatch++;
+                });
+                ovBox.innerHTML = _buildTwoSlicePieSvg(bsegMatch, bsegMismatch, "BSEGs", "BSEGs Passed", criteriaTip);
+            }
         }
 
-        const mLen = (matched / total) * circ;
-        const mmLen = (mismatched / total) * circ;
-        const mPct = ((matched / total) * 100).toFixed(1);
-        const mmPct = ((mismatched / total) * 100).toFixed(1);
+        // 2. PIE 2 (Middle): SQIs (Technical name in hover)
+        if (sqBox) {
+            const sqStat = _ibcCachedTableStats["CI_BSEG_SQ"] || { match: 0, mismatch: 0 };
+            sqBox.innerHTML = _buildTwoSlicePieSvg(sqStat.match || 0, sqStat.mismatch || 0, "Rows", "Pass Rate", "Technical Table: CI_BSEG_SQ");
+        }
 
-        const tipM = `🟢 <b>Matched ${unitLabel}</b><br>Count: ${matched.toLocaleString()} / ${total.toLocaleString()}<br>Share: ${mPct}%${extraHtml}`;
-        const tipMM = `🔴 <b>Mismatched ${unitLabel}</b><br>Count: ${mismatched.toLocaleString()} / ${total.toLocaleString()}<br>Share: ${mmPct}%${extraHtml}`;
+        // 3. PIE 3 (Right): Calc Lines (Technical name in hover)
+        if (lnBox) {
+            const lnStat = _ibcCachedTableStats["CI_BSEG_CALC_LN"] || { match: 0, mismatch: 0 };
+            lnBox.innerHTML = _buildTwoSlicePieSvg(lnStat.match || 0, lnStat.mismatch || 0, "Rows", "Pass Rate", "Technical Table: CI_BSEG_CALC_LN");
+        }
 
-        return `<svg viewBox="0 0 420 250" width="100%" height="260">
-            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#edf2f7" stroke-width="${sw}"/>
-            ${matched > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#16a34a" stroke-width="${sw}"
-                stroke-dasharray="${mLen} ${circ}" stroke-dashoffset="0" transform="rotate(-90 ${cx} ${cy})"
-                style="cursor:pointer;"
-                onmouseover="this.setAttribute('stroke-width','40'); showIbcTooltip(event, '${tipM}')"
-                onmousemove="showIbcTooltip(event, '${tipM}')"
-                onmouseout="this.setAttribute('stroke-width','${sw}'); hideIbcTooltip()"/>` : ""}
-            ${mismatched > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dc2626" stroke-width="${sw}"
-                stroke-dasharray="${mmLen} ${circ}" stroke-dashoffset="${-mLen}" transform="rotate(-90 ${cx} ${cy})"
-                style="cursor:pointer;"
-                onmouseover="this.setAttribute('stroke-width','40'); showIbcTooltip(event, '${tipMM}')"
-                onmousemove="showIbcTooltip(event, '${tipMM}')"
-                onmouseout="this.setAttribute('stroke-width','${sw}'); hideIbcTooltip()"/>` : ""}
+        // 4. BOTTOM FULL-WIDTH BAR CHART (Functional names on X-axis, Technical names in hover)
+        if (!barBox) return;
+        const allTbls = Object.keys(_ibcCachedTableStats).sort((a, b) =>
+            ((_ibcTableMetaMap[a]?.order) || 99) - ((_ibcTableMetaMap[b]?.order) || 99)
+        );
+        const filteredTbls = allTbls.filter(t => {
+            if (_ibcChartScope === "bill") return t.startsWith("CI_BILL");
+            if (_ibcChartScope === "bseg") return !t.startsWith("CI_BILL");
+            return true;
+        });
 
-            <text x="${cx}" y="${cy - 6}" text-anchor="middle" font-size="22" font-weight="800" fill="#003366">${mPct}%</text>
-            <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="12" font-weight="600" fill="#64748b">${total.toLocaleString()} ${unitLabel}</text>
-            <text x="${cx}" y="${cy + 28}" text-anchor="middle" font-size="10" fill="#94a3b8">${subLblText}</text>
+        const maxValRaw = Math.max(...filteredTbls.map(t => Math.max(_ibcCachedTableStats[t].match || 0, _ibcCachedTableStats[t].mismatch || 0)), 1);
+        const mag = Math.pow(10, Math.floor(Math.log10(maxValRaw)));
+        const norm = maxValRaw / mag;
+        let niceCeil = 10;
+        if (norm <= 1.2) niceCeil = 1.2;
+        else if (norm <= 2) niceCeil = 2;
+        else if (norm <= 3) niceCeil = 3;
+        else if (norm <= 4) niceCeil = 4;
+        else if (norm <= 5) niceCeil = 5;
+        else if (norm <= 6) niceCeil = 6;
+        else if (norm <= 8) niceCeil = 8;
+        const maxVal = Math.max(Math.ceil(niceCeil * mag), 4);
 
-            <rect x="255" y="75" width="14" height="14" rx="3" fill="#16a34a"/>
-            <text x="276" y="87" font-size="13.5" font-weight="600" fill="#1e293b">Matched (${matched.toLocaleString()})</text>
+        const baseY = 160, chartH = 122, chartLeft = 52, chartRight = 895;
+        const colW = (chartRight - chartLeft) / Math.max(filteredTbls.length, 1);
 
-            <rect x="255" y="118" width="14" height="14" rx="3" fill="#dc2626"/>
-            <text x="276" y="130" font-size="13.5" font-weight="600" fill="#1e293b">Mismatch (${mismatched.toLocaleString()})</text>
+        let scaleHtml = `<line x1="${chartLeft}" y1="${baseY - chartH}" x2="${chartLeft}" y2="${baseY}" stroke="#cbd5e0" stroke-width="1"/>`;
+        const numTicks = 4;
+        for (let s = 0; s <= numTicks; s++) {
+            const tickVal = Math.round((maxVal / numTicks) * s);
+            const tickY = baseY - (tickVal / maxVal) * chartH;
+            scaleHtml += `
+                <line x1="${chartLeft}" y1="${tickY}" x2="${chartRight}" y2="${tickY}" stroke="${s === 0 ? '#94a3b8' : '#e2e8f0'}" stroke-dasharray="${s === 0 ? 'none' : '4 4'}" stroke-width="${s === 0 ? 1.5 : 1}"/>
+                <text x="${chartLeft - 8}" y="${tickY + 3.5}" text-anchor="end" font-size="10" font-weight="600" fill="#64748b">${tickVal.toLocaleString()}</text>
+            `;
+        }
 
-            <rect x="255" y="161" width="14" height="14" rx="3" fill="#6f42c1"/>
-            <text x="276" y="173" font-size="13.5" font-weight="700" fill="#6f42c1">Total (${total.toLocaleString()})</text>
-        </svg>`;
+        let barsHtml = "";
+        filteredTbls.forEach((t, i) => {
+            const funcName = getIbcFuncName(t);
+            const m = _ibcCachedTableStats[t].match || 0;
+            const mm = _ibcCachedTableStats[t].mismatch || 0;
+            const tot = m + mm;
+            const passPct = tot > 0 ? ((m / tot) * 100).toFixed(1) : "0.0";
+            const mmPctBar = tot > 0 ? ((mm / tot) * 100).toFixed(1) : "0.0";
+            const hm = (m / maxVal) * chartH;
+            const hmm = (mm / maxVal) * chartH;
+            const xc = chartLeft + i * colW + colW / 2;
+            const bw = filteredTbls.length <= 2 ? 38 : 24;
+
+            const tipM = `<b>${funcName}</b> (${t})<br>🟢 Matched: ${m.toLocaleString()} rows (${passPct}%)<br>Total in table: ${tot.toLocaleString()}`;
+            const tipMM = `<b>${funcName}</b> (${t})<br>🔴 Mismatch: ${mm.toLocaleString()} rows (${mmPctBar}%)<br>Total in table: ${tot.toLocaleString()}`;
+
+            barsHtml += `
+                <rect x="${xc - bw - 2}" y="${baseY - hm}" width="${bw}" height="${Math.max(hm, 2)}" rx="2" fill="#16a34a" style="cursor:pointer;"
+                    onmouseover="this.setAttribute('opacity','0.75'); showIbcTooltip(event, '${tipM}')"
+                    onmousemove="showIbcTooltip(event, '${tipM}')"
+                    onmouseout="this.setAttribute('opacity','1'); hideIbcTooltip()"/>
+                ${m > 0 ? `<text x="${xc - bw/2 - 2}" y="${baseY - hm - 4}" text-anchor="middle" font-size="10" font-weight="bold" fill="#15803d">${m.toLocaleString()}</text>` : ''}
+                <rect x="${xc + 2}" y="${baseY - hmm}" width="${bw}" height="${Math.max(hmm, 2)}" rx="2" fill="#dc2626" style="cursor:pointer;"
+                    onmouseover="this.setAttribute('opacity','0.75'); showIbcTooltip(event, '${tipMM}')"
+                    onmousemove="showIbcTooltip(event, '${tipMM}')"
+                    onmouseout="this.setAttribute('opacity','1'); hideIbcTooltip()"/>
+                ${mm > 0 ? `<text x="${xc + bw/2 + 2}" y="${baseY - hmm - 4}" text-anchor="middle" font-size="10" font-weight="bold" fill="#dc2626">${mm.toLocaleString()}</text>` : ''}
+                <text x="${xc}" y="${baseY + 18}" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#334155">${funcName}</text>
+            `;
+        });
+
+        barBox.innerHTML = `
+            <svg viewBox="0 0 920 195" width="100%" height="195">
+                ${scaleHtml}
+                <rect x="760" y="6" width="11" height="11" rx="2" fill="#16a34a"/><text x="776" y="15" font-size="11" font-weight="bold" fill="#334155">Match</text>
+                <rect x="830" y="6" width="11" height="11" rx="2" fill="#dc2626"/><text x="846" y="15" font-size="11" font-weight="bold" fill="#334155">Mismatch</text>
+                ${barsHtml}
+            </svg>
+        `;
     }
