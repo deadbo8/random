@@ -1,49 +1,7 @@
-def _write_side_by_side_sheet(self, ws, new_id: str, old_id: str, rows: list[dict], default_cols: list[str]):
-        YELLOW = PatternFill("solid", fgColor="FFE699")
-        GREEN = PatternFill("solid", fgColor="D4EDDA")
-        RED = PatternFill("solid", fgColor="F8D7DA")
-        BLUE = PatternFill("solid", fgColor="D1ECF1")
-        BOLD = Font(name="Calibri", size=10, bold=True)
+def _func_name(self, tbl_name: str) -> str:
+        meta = BSEG_TABLE_REGISTRY.get(tbl_name) or BILL_TABLE_REGISTRY.get(tbl_name) or {}
+        return meta.get("functional_name", tbl_name)
 
-        cols = list(default_cols)
-        if not cols:
-            for r in rows:
-                if r["new"]:
-                    cols = list(r["new"].keys())
-                    break
-                if r["old"]:
-                    cols = list(r["old"].keys())
-                    break
-        if not cols:
-            cols = ["NO_DATA"]
 
-        num_cols = len(cols)
-        status_col = 1                 # Column A: Comparison
-        new_start_col = 2              # Column B+: New ID columns
-        old_start_col = num_cols + 3   # 1 blank spacer column between New & Old
 
-        ws.cell(row=1, column=status_col, value="Comparison").font = BOLD
-        ws.cell(row=1, column=new_start_col, value=f"New: {new_id}").font = BOLD
-        ws.cell(row=1, column=old_start_col, value=f"Old: {old_id}").font = BOLD
 
-        ws.cell(row=2, column=status_col, value="Status").font = BOLD
-        for idx, c_name in enumerate(cols):
-            ws.cell(row=2, column=new_start_col + idx, value=c_name).font = BOLD
-            ws.cell(row=2, column=old_start_col + idx, value=c_name).font = BOLD
-
-        for r_i, item in enumerate(rows, start=3):
-            n_dict, o_dict, st = item["new"], item["old"], item["status"]
-
-            st_cell = ws.cell(row=r_i, column=status_col, value=st)
-            st_cell.font = BOLD
-            st_cell.fill = GREEN if st == "match" else (BLUE if "exception" in st else RED)
-
-            for idx, c_name in enumerate(cols):
-                v_new = norm_val(n_dict.get(c_name)) if n_dict else ""
-                v_old = norm_val(o_dict.get(c_name)) if o_dict else ""
-                c1 = ws.cell(row=r_i, column=new_start_col + idx, value=v_new)
-                c2 = ws.cell(row=r_i, column=old_start_col + idx, value=v_old)
-
-                if st == "mismatch" and n_dict and o_dict and c_name not in ("BSEG_ID", "BILL_ID", "SEQNO", "GL_SEQ_NBR") and v_new != v_old:
-                    c1.fill = YELLOW
-                    c2.fill = YELLOW
