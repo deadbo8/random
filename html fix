@@ -1,33 +1,20 @@
-def _render_pie_png(matched: int, mismatched: int, title: str, unit_lbl: str) -> io.BytesIO:
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
+@ibc_bp.route("/api/ibc/exceptions/download", methods=["GET"])
+def download_ibc_exceptions():
+    exc_path = os.path.join(get_base_dir(), "storage", "compare_exceptions.xlsx")
+    if not os.path.exists(exc_path):
+        return jsonify({"error": "compare_exceptions.xlsx not found in storage/."}), 404
+    return send_file(
+        exc_path, as_attachment=True, download_name="compare_exceptions.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-    fig = Figure(figsize=(3.2, 2.7), dpi=150)
-    FigureCanvasAgg(fig)
-    fig.subplots_adjust(left=0.05, right=0.95, top=0.86, bottom=0.16)
-    ax = fig.add_subplot(111)
-    ax.set_aspect("equal")
-
-    total = matched + mismatched
-    if total > 0:
-        pct = (matched / total) * 100
-        ax.pie(
-            [matched, mismatched], colors=["#16a34a", "#dc2626"],
-            startangle=90, counterclock=False, radius=1.0,
-            wedgeprops=dict(width=0.38, edgecolor="white", linewidth=2)
-        )
-        ax.text(0, 0.08, f"{pct:.1f}%", ha="center", va="center", fontsize=13, fontweight="bold", color="#003366")
-        ax.text(0, -0.18, f"{total:,} {unit_lbl}", ha="center", va="center", fontsize=8, color="#64748b")
-        ax.legend(
-            [f"Matched ({matched:,})", f"Mismatch ({mismatched:,})"],
-            loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=2, frameon=False, fontsize=7.5
-        )
-    else:
-        ax.pie([1], colors=["#e2e8f0"], radius=1.0, wedgeprops=dict(width=0.38, edgecolor="white"))
-        ax.text(0, 0, "Excluded\n(0 Rows)", ha="center", va="center", fontsize=8.5, fontweight="bold", color="#94a3b8")
-
-    ax.set_title(title, fontsize=10, fontweight="bold", color="#1e293b", pad=6)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", transparent=True)
-    buf.seek(0)
-    return buf
+@ibc_bp.route("/api/ibc/exceptions/upload", methods=["POST"])
+def upload_ibc_exceptions():
+    f = request.files.get("exceptionsFile")
+    if not f or not f.filename.endswith((".xlsx", ".xls")):
+        return jsonify({"error": "Please upload a valid .xlsx exception file."}), 400
+    storage_dir = os.path.join(get_base_dir(), "storage")
+    os.makedirs(storage_dir, exist_ok=True)
+    save_path = os.path.join(storage_dir, "compare_exceptions.xlsx")
+    f.save(save_path)
+    return jsonify({"ok": True, "message": "Exceptions list updated successfully! Re-run validation to apply new rules."})
