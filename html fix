@@ -1,115 +1,49 @@
-BILL_TABLE_REGISTRY = {
-    "CI_BILL_MSGS": {
-        "order": 6,
-        "functional_name": "Bill Msgs",
-        "default_selected": False,
-        "id_col": "BILL_ID",
-        "ignore_cols": {"BILL_ID", "SEQNO"},
-        "align_keys": ["BILL_MSG_CD"],
-        "check_25_4": False,
-        "description": "Bill-Level Customer Messages"
-    }
-}
+def _write_side_by_side_sheet(self, ws, new_id: str, old_id: str, rows: list[dict], default_cols: list[str]):
+        YELLOW = PatternFill("solid", fgColor="FFE699")
+        GREEN = PatternFill("solid", fgColor="D4EDDA")
+        RED = PatternFill("solid", fgColor="F8D7DA")
+        BLUE = PatternFill("solid", fgColor="D1ECF1")
+        BOLD = Font(name="Calibri", size=10, bold=True)
 
-BSEG_TABLE_REGISTRY = {
-    "CI_BSEG_CALC": {
-        "order": 1,
-        "functional_name": "Bseg Headers",
-        "default_selected": True,
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "HEADER_SEQ"},
-        "align_keys": ["RS_CD"],
-        "check_25_4": False,
-        "description": "Bill Segment Header Rate Schedule & Calc Totals"
-    },
-    "CI_BSEG_READ": {
-        "order": 2,
-        "functional_name": "Reads",
-        "default_selected": True,
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO"},
-        "align_keys": ["SP_ID", "UOM_CD", "TOU_CD"],
-        "check_25_4": False,
-        "description": "Meter Register Readings & Usage Quantities"
-    },
-    "CI_BSEG_SQ": {
-        "order": 3,
-        "functional_name": "SQIs",
-        "default_selected": True,
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO"},
-        "align_keys": ["UOM_CD", "TOU_CD", "SQI_CD"],
-        "check_25_4": False,
-        "description": "Service Quantities (ALLKWH, BILLDAYS, Baseline)"
-    },
-    "CI_BSEG_CALC_LN": {
-        "order": 4,
-        "functional_name": "Calc Lines",
-        "default_selected": True,
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO", "RC_SEQ"},
-        "align_keys": ["HEADER_SEQ", "RC_SEQ"],
-        "check_25_4": True,
-        "description": "Granular Rate Component Calculation Lines"
-    },
-    "CI_FT_GL": {
-        "order": 5,
-        "functional_name": "Financials",
-        "default_selected": True,
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "GL_SEQ_NBR"},
-        "align_keys": ["DST_ID", "CHAR_TYPE_CD", "CHAR_VAL", "GL_ACCT"],
-        "check_25_4": False,
-        "description": "Financial Transaction General Ledger Lines",
-        "custom_sql": """
-            SELECT ft.SIBLING_ID AS BSEG_ID,
-                   gl.GL_SEQ_NBR, gl.DST_ID, gl.CHAR_TYPE_CD, gl.AMOUNT,
-                   gl.CHAR_VAL, gl.TOT_AMT_SW, gl.STATISTIC_AMOUNT, gl.GL_ACCT
-            FROM {schema}.CI_FT_GL gl
-            INNER JOIN {schema}.CI_FT ft ON gl.FT_ID = ft.FT_ID
-            WHERE ft.SIBLING_ID IN ({binds})
-              AND ft.FT_TYPE_FLG = 'BS'
-        """
-    },
-    "CI_BSEG_MSG": {
-        "order": 7,
-        "functional_name": "Bseg Msgs",
-        "default_selected": False,
-        "id_col": "BSEG_ID",
-        "ignore_cols": {"BSEG_ID", "SEQNO"},
-        "align_keys": ["BILL_MSG_CD"],
-        "check_25_4": False,
-        "description": "Segment-Level Billing Messages"
-    }
-}
+        cols = list(default_cols)
+        if not cols:
+            for r in rows:
+                if r["new"]:
+                    cols = list(r["new"].keys())
+                    break
+                if r["old"]:
+                    cols = list(r["old"].keys())
+                    break
+        if not cols:
+            cols = ["NO_DATA"]
 
-def get_ordered_table_meta(scope: str = "bill_and_bseg") -> list[dict]:
-    """Returns all registered tables sorted in exact sequence 1-7 with functional names."""
-    items = []
-    for k, v in BSEG_TABLE_REGISTRY.items():
-        items.append({"table": k, "functional_name": v["functional_name"], "order": v["order"], "default_selected": v["default_selected"], "level": "BSEG"})
-    if scope == "bill_and_bseg":
-        for k, v in BILL_TABLE_REGISTRY.items():
-            items.append({"table": k, "functional_name": v["functional_name"], "order": v["order"], "default_selected": v["default_selected"], "level": "BILL"})
-    return sorted(items, key=lambda x: x["order"])
+        num_cols = len(cols)
+        status_col = 1                 # Column A: Comparison
+        new_start_col = 2              # Column B+: New ID columns
+        old_start_col = num_cols + 3   # 1 blank spacer column between New & Old
 
-def load_rate_categories(base_dir: str) -> dict:
-    """Reads Type & Meter Type per Rate Schedule from storage/db_storage.xlsx -> season_config."""
-    import os
-    path = os.path.join(base_dir, "storage", "db_storage.xlsx")
-    mapping = {}
-    if not os.path.exists(path):
-        return mapping
-    try:
-        df = pd.read_excel(path, sheet_name="season_config")
-        df.columns = [str(c).strip() for c in df.columns]
-        for _, r in df.iterrows():
-            rs = str(r.get("Rate Schedule", "") or "").strip().upper()
-            if rs and rs != "NAN":
-                mapping[rs] = {
-                    "type": str(r.get("Type", "") or "").strip() or "Other",
-                    "meter_type": str(r.get("Meter Type", "") or "").strip() or "Other"
-                }
-    except Exception as e:
-        print(f"[IBC season_config Warning] {e}")
-    return mapping
+        ws.cell(row=1, column=status_col, value="Comparison").font = BOLD
+        ws.cell(row=1, column=new_start_col, value=f"New: {new_id}").font = BOLD
+        ws.cell(row=1, column=old_start_col, value=f"Old: {old_id}").font = BOLD
+
+        ws.cell(row=2, column=status_col, value="Status").font = BOLD
+        for idx, c_name in enumerate(cols):
+            ws.cell(row=2, column=new_start_col + idx, value=c_name).font = BOLD
+            ws.cell(row=2, column=old_start_col + idx, value=c_name).font = BOLD
+
+        for r_i, item in enumerate(rows, start=3):
+            n_dict, o_dict, st = item["new"], item["old"], item["status"]
+
+            st_cell = ws.cell(row=r_i, column=status_col, value=st)
+            st_cell.font = BOLD
+            st_cell.fill = GREEN if st == "match" else (BLUE if "exception" in st else RED)
+
+            for idx, c_name in enumerate(cols):
+                v_new = norm_val(n_dict.get(c_name)) if n_dict else ""
+                v_old = norm_val(o_dict.get(c_name)) if o_dict else ""
+                c1 = ws.cell(row=r_i, column=new_start_col + idx, value=v_new)
+                c2 = ws.cell(row=r_i, column=old_start_col + idx, value=v_old)
+
+                if st == "mismatch" and n_dict and o_dict and c_name not in ("BSEG_ID", "BILL_ID", "SEQNO", "GL_SEQ_NBR") and v_new != v_old:
+                    c1.fill = YELLOW
+                    c2.fill = YELLOW
