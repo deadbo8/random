@@ -1,103 +1,75 @@
-function initIbcDashboard(data) {
-        const dash = document.getElementById("ibcDashboardArea");
-        if (dash) dash.style.display = "block";
-        const insp = document.getElementById("ibcDrilldownInspector");
-        if (insp) insp.style.display = "none";
+# Bottom Row: Full-Width Bar Chart
+     if charts_buf.get("table_png"):
+         charts_buf["table_png"].seek(0)
+         p_bar = doc.add_paragraph()
+         p_bar.alignment = WD_ALIGN_PARAGRAPH.CENTER
+         p_bar.paragraph_format.space_before = Pt(8)
+         p_bar.add_run().add_picture(charts_buf["table_png"], width=Inches(7.0))
 
-        // 1. Skipped Invalid / Missing Pairs Banner
-        const skipBanner = document.getElementById("ibcSkippedBanner");
-        const skipList = document.getElementById("ibcSkippedList");
-        const skipped = data.skipped_invalid || [];
-        if (skipBanner && skipList) {
-            if (skipped.length > 0) {
-                const cntEl = document.getElementById("ibcSkippedCount");
-                if (cntEl) cntEl.textContent = skipped.length;
-                skipList.innerHTML = skipped.map(s =>
-                    `<li><strong>Row ${s.row_num}</strong> (${s.new_id} vs ${s.old_id}): ${s.reason}</li>`
-                ).join("");
-                skipList.style.display = "none";
-                skipBanner.style.display = "block";
-            } else {
-                skipBanner.style.display = "none";
-            }
-        }
 
-        const bsegs = data.bseg_summary || [];
-        const bills = data.bill_summary || [];
 
-        // 2. Populate Main Rate Schedule Filter
-        const rateSelect = document.getElementById("ibcRateFilter");
-        if (rateSelect) {
-            const uniqueRates = Array.from(new Set(bsegs.map(r => r.Rate_cd).filter(Boolean))).sort();
-            rateSelect.innerHTML = `<option value="ALL">All Rates (${uniqueRates.length})</option>` +
-                uniqueRates.map(r => `<option value="${r}">${r}</option>`).join("");
-        }
 
-        // 3. Build tStats FIRST (before reading Object.keys(tStats))
-        let tStats = data.table_chart_stats || {};
-        if (Object.keys(tStats).length === 0) {
-            if (data.scope !== "bseg_only" && bills.length) {
-                tStats["CI_BILL_MSGS"] = {
-                    match: bills.reduce((a, r) => a + (r.CI_BILL_MSGS_match || 0), 0),
-                    mismatch: bills.reduce((a, r) => a + (r.CI_BILL_MSGS_mismatch || 0), 0)
-                };
-            }
-            ["CI_BSEG_CALC", "CI_BSEG_READ", "CI_BSEG_SQ", "CI_BSEG_CALC_LN", "CI_FT_GL", "CI_BSEG_MSG"].forEach(t => {
-                tStats[t] = {
-                    match: bsegs.reduce((a, r) => a + (r[`${t}_match`] || 0), 0),
-                    mismatch: bsegs.reduce((a, r) => a + (r[`${t}_mismatch`] || 0), 0)
-                };
-            });
-        }
 
-        // 4. Load Functional Metadata (Order 1-7) & Default Select 1-5
-        _ibcTableMetaMap = {};
-        (data.table_meta || []).forEach(m => { _ibcTableMetaMap[m.table] = m; });
-        _ibcRateCategories = data.rate_categories || {};
 
-        _ibcAllJobTables = Object.keys(tStats).sort((a, b) =>
-            ((_ibcTableMetaMap[a]?.order) || 99) - ((_ibcTableMetaMap[b]?.order) || 99)
-        );
-        const defaultActive = _ibcAllJobTables.filter(t => _ibcTableMetaMap[t] ? _ibcTableMetaMap[t].default_selected : true);
-        _ibcSelectedTables = new Set(defaultActive.length ? defaultActive : _ibcAllJobTables);
+Here are the 3 pinpointed edits:
+1. Remove "Overall Validation Verdict" & Add the Bar Chart Back (controller/ibc/ibc_engine.py)
+Inside generate_executive_word_report in controller/ibc/ibc_engine.py:
+Remove the Verdict lines (find p_verd = doc.add_paragraph() and keep only the exceptions bullet):
+Python
+p_verd = doc.add_paragraph()
+     p_verd.paragraph_format.space_after = Pt(6)
+     aptos_run(p_verd, f"• Approved 25.4 Exceptions: {exceptions:,} extra zero-dollar calculation lines accepted via business whitelist.", size=9.5)
+Add the Bar Chart right below the 3 Pie Charts (just above docx_filename = f"IBC_Executive_Report_{task_id}.docx"):
+Python
+# Bottom Row: Full-Width Bar Chart
+     if charts_buf.get("table_png"):
+         charts_buf["table_png"].seek(0)
+         p_bar = doc.add_paragraph()
+         p_bar.alignment = WD_ALIGN_PARAGRAPH.CENTER
+         p_bar.paragraph_format.space_before = Pt(8)
+         p_bar.add_run().add_picture(charts_buf["table_png"], width=Inches(7.0))
+2. Use Functional Names (1–7 Order) on the Word Bar Chart (controller/ibc/ibc_route.py)
+Inside _generate_matplotlib_charts in controller/ibc/ibc_route.py (under # 4. Bottom Full-Width Bar Chart), replace the tbl_names and short_names lines with:
+Python
+all_reg = {**BILL_TABLE_REGISTRY, **BSEG_TABLE_REGISTRY}
+        tbl_names = sorted(table_stats.keys(), key=lambda t: all_reg.get(t, {}).get("order", 99))
+        short_names = [all_reg.get(t, {}).get("functional_name", t.replace("CI_", "")) for t in tbl_names]
+3. Move the Status Column to the Front in the Table Inspector (web/static/my_script.js)
+In web/static/my_script.js inside renderInspectorActiveSheet() (near the bottom of the file), move the status column to the first column in both <thead> and <tbody>:
+JavaScript
+let html = `<table style="width: 100%; border-collapse: collapse; font-size: 11px; color: #1a202c;">
+            <thead>
+                <tr style="background: #1e293b; color: #fff;">
+                    <th style="padding: 6px; border-right: 2px solid #fff;">Comparison</th>
+                    <th colspan="${cols.length}" style="padding: 6px; border-right: 2px solid #fff;">New: ${nId}</th>
+                    <th colspan="${cols.length}" style="padding: 6px;">Old: ${oId}</th>
+                </tr>
+                <tr style="background: #f1f5f9; color: #1e293b; border-bottom: 2px solid #cbd5e0;">
+                    <th style="padding: 5px; border-right: 2px solid #cbd5e0;">Status</th>
+                    ${cols.map(c => `<th style="padding: 5px;">${c}</th>`).join("")}
+                    ${cols.map(c => `<th style="padding: 5px;">${c}</th>`).join("")}
+                </tr>
+            </thead>
+            <tbody>`;
 
-        // 5. Populate Rate Breakdown Section's Own Filters (Type & Meter Type from season_config)
-        const typesSet = new Set(), metersSet = new Set(), ownRatesSet = new Set();
-        bsegs.forEach(b => {
-            const rc = (b.Rate_cd || "").toUpperCase();
-            if (rc && rc !== "-") ownRatesSet.add(rc);
-            const cat = _ibcRateCategories[rc];
-            typesSet.add(cat ? cat.type : "Other");
-            metersSet.add(cat ? cat.meter_type : "Other");
+        filtered.forEach(item => {
+            const n = item.new || {};
+            const o = item.old || {};
+            const st = item.status;
+            const bg = st === "match" ? "#f0fdf4" : (st.includes("exception") ? "#ecfeff" : "#fef2f2");
+            const stColor = st === "match" ? "#15803d" : (st.includes("exception") ? "#0284c7" : "#dc2626");
+
+            const cellHtml = (c, sideVal, otherVal) => {
+                const isDiff = st === "mismatch" && item.new && item.old &&
+                    !["BSEG_ID", "BILL_ID", "SEQNO", "GL_SEQ_NBR"].includes(c) &&
+                    String(sideVal ?? "").trim() !== String(otherVal ?? "").trim();
+                return `<td style="padding:5px; ${isDiff ? 'background:#fde047; color:#991b1b; font-weight:800;' : ''}">${sideVal ?? ""}</td>`;
+            };
+
+            html += `<tr style="background: ${bg}; border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 5px; font-weight: 700; color: ${stColor}; border-right: 2px solid #cbd5e0; white-space: nowrap;">${st}</td>
+                ${cols.map(c => cellHtml(c, n[c], o[c])).join("")}
+                ${cols.map(c => cellHtml(c, o[c], n[c])).join("")}
+            </tr>`;
         });
-        const tSel = document.getElementById("ibcRateCatTypeFilter");
-        if (tSel) tSel.innerHTML = `<option value="ALL">All Types</option>` + Array.from(typesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
-        const mSel = document.getElementById("ibcRateCatMeterFilter");
-        if (mSel) mSel.innerHTML = `<option value="ALL">All Meter Types</option>` + Array.from(metersSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
-        const rSel = document.getElementById("ibcRateOwnRateFilter");
-        if (rSel) rSel.innerHTML = `<option value="ALL">All Rates</option>` + Array.from(ownRatesSet).sort().map(v => `<option value="${v}">${v}</option>`).join("");
-
-        // 6. Collapse Rate Breakdown by Default
-        const rbBody = document.getElementById("ibcRateBreakdownBody");
-        const rbBtn = document.getElementById("ibcRateCollapseBtn");
-        if (rbBody) rbBody.style.display = "none";
-        if (rbBtn) rbBtn.textContent = "▶ Expand";
-
-        // 7. Scope-Aware Tabs & Overall Pie Toggle
-        const billTabBtn = document.getElementById("tabBtnBillLevel");
-        const pieBillBtn = document.getElementById("pieBtnBill");
-        if (data.scope === "bseg_only") {
-            if (billTabBtn) billTabBtn.style.display = "none";
-            if (pieBillBtn) pieBillBtn.style.display = "none";
-            _ibcOverallPieMode = "bseg";
-            switchIbcTableTab("bseg");
-        } else {
-            if (billTabBtn) billTabBtn.style.display = "inline-block";
-            if (pieBillBtn) pieBillBtn.style.display = "inline-block";
-            switchIbcTableTab("bill");
-        }
-
-        // 8. Render Ribbons, KPIs, All 3 Pie Charts, Bar Chart, Rate Breakdown & Tables
-        renderIbcTableRibbons();
-        applyIbcRibbonFilterToDashboard();
-    }
+(Also bump ?v=14 to ?v=15 on my_script.js in web/templates/index.html, save all files, restart py app.py, and press Ctrl + F5 in the browser!)
