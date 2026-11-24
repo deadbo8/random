@@ -1,20 +1,12 @@
-@ibc_bp.route("/api/ibc/exceptions/download", methods=["GET"])
-def download_ibc_exceptions():
-    exc_path = os.path.join(get_base_dir(), "storage", "compare_exceptions.xlsx")
-    if not os.path.exists(exc_path):
-        return jsonify({"error": "compare_exceptions.xlsx not found in storage/."}), 404
-    return send_file(
-        exc_path, as_attachment=True, download_name="compare_exceptions.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-@ibc_bp.route("/api/ibc/exceptions/upload", methods=["POST"])
-def upload_ibc_exceptions():
-    f = request.files.get("exceptionsFile")
-    if not f or not f.filename.endswith((".xlsx", ".xls")):
-        return jsonify({"error": "Please upload a valid .xlsx exception file."}), 400
-    storage_dir = os.path.join(get_base_dir(), "storage")
-    os.makedirs(storage_dir, exist_ok=True)
-    save_path = os.path.join(storage_dir, "compare_exceptions.xlsx")
-    f.save(save_path)
-    return jsonify({"ok": True, "message": "Exceptions list updated successfully! Re-run validation to apply new rules."})
+<div style="display: flex; gap: 8px; align-items: center;">
+    <a href="/api/ibc/exceptions/download" download="compare_exceptions.xlsx" style="color: #0284c7; font-size: 12px; font-weight: 600; text-decoration: none; border: 1px solid #0284c7; padding: 5px 10px; border-radius: 4px;">
+        ⬇ Exceptions (.xlsx)
+    </a>
+    <button type="button" onclick="document.getElementById('ibcExcUploadInput').click()" style="background: #f8fafc; color: #334155; font-size: 12px; font-weight: 600; border: 1px solid #cbd5e0; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
+        ⬆ Update Exceptions
+    </button>
+    <input type="file" id="ibcExcUploadInput" accept=".xlsx,.xls" style="display: none;" onchange="uploadIbcExceptionsFile(this)" />
+    <a href="/api/ibc/template" download="IBC_User_Input_Template.xlsx" style="color: #007bff; font-size: 12px; font-weight: 600; text-decoration: none; border: 1px solid #007bff; padding: 5px 10px; border-radius: 4px;">
+        ⬇ User_Input Template
+    </a>
+</div>
