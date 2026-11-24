@@ -1,28 +1,50 @@
-In drawIbcChartsByScope():
-First Graph (ovBox) Hover: Pass extra hover context "Based on selected criteria: " + Array.from(_ibcSelectedTables).map(t => getIbcFuncName(t) + " (" + t + ")").join(", ") into _buildTwoSlicePieSvg (add an optional extraTip = "" parameter to _buildTwoSlicePieSvg and append <br><span style="color:#93c5fd;font-size:10.5px;">${extraTip}</span> inside showIbcTooltip!).
-Bar Chart X-axis labels: Change const shortName = t.replace("CI_", ""); to const shortName = getIbcFuncName(t); and keep <b>${shortName}</b> (${t}) inside tipM / tipMM!
-In renderIbcRateBreakdown(): Filter by its own 3 dropdowns (ibcRateCatTypeFilter, ibcRateCatMeterFilter, ibcRateOwnRateFilter) + _ibcActiveBillHash:
-JavaScript
-const catType = document.getElementById("ibcRateCatTypeFilter")?.value || "ALL";
-     const catMeter = document.getElementById("ibcRateCatMeterFilter")?.value || "ALL";
-     const ownRate = document.getElementById("ibcRateOwnRateFilter")?.value || "ALL";
+function _buildTwoSlicePieSvg(matched, mismatched, unitLabel, subLblText = "Pass Rate", extraTip = "") {
+        const total = matched + mismatched;
+        const r = 88, cx = 120, cy = 125, sw = 34, circ = 2 * Math.PI * r;
+        const extraHtml = extraTip ? `<br><small style=color:#93c5fd>${String(extraTip).replace(/'/g, "")}</small>` : "";
 
-     const filtered = allBsegs.filter(r => {
-         const rc = (r.Rate_cd || "").toUpperCase();
-         const cat = _ibcRateCategories[rc] || { type: "Other", meter_type: "Other" };
-         const matchBill = _ibcActiveBillHash === "ALL" || r.bill_pair_hash === _ibcActiveBillHash;
-         const matchType = catType === "ALL" || cat.type === catType;
-         const matchMeter = catMeter === "ALL" || cat.meter_type === catMeter;
-         const matchRate = ownRate === "ALL" || rc === ownRate;
-         return matchBill && matchType && matchMeter && matchRate;
-     });
-And add its reset helper:
-JavaScript
-function resetIbcRateSectionFilters() {
-     const setAll = id => { const el = document.getElementById(id); if (el) el.value = "ALL"; };
-     setAll("ibcRateCatTypeFilter");
-     setAll("ibcRateCatMeterFilter");
-     setAll("ibcRateOwnRateFilter");
-     renderIbcRateBreakdown();
- }
- window.resetIbcRateSectionFilters = resetIbcRateSectionFilters;
+        if (total === 0) {
+            return `<svg viewBox="0 0 420 250" width="100%" height="260">
+                <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="${sw}"/>
+                <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="16" font-weight="700" fill="#94a3b8">No Data</text>
+                <text x="255" y="${cy + 4}" font-size="14" font-weight="600" fill="#64748b">0 ${unitLabel} (Excluded)</text>
+            </svg>`;
+        }
+
+        const mLen = (matched / total) * circ;
+        const mmLen = (mismatched / total) * circ;
+        const mPct = ((matched / total) * 100).toFixed(1);
+        const mmPct = ((mismatched / total) * 100).toFixed(1);
+
+        const tipM = `🟢 <b>Matched ${unitLabel}</b><br>Count: ${matched.toLocaleString()} / ${total.toLocaleString()}<br>Share: ${mPct}%${extraHtml}`;
+        const tipMM = `🔴 <b>Mismatched ${unitLabel}</b><br>Count: ${mismatched.toLocaleString()} / ${total.toLocaleString()}<br>Share: ${mmPct}%${extraHtml}`;
+
+        return `<svg viewBox="0 0 420 250" width="100%" height="260">
+            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#edf2f7" stroke-width="${sw}"/>
+            ${matched > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#16a34a" stroke-width="${sw}"
+                stroke-dasharray="${mLen} ${circ}" stroke-dashoffset="0" transform="rotate(-90 ${cx} ${cy})"
+                style="cursor:pointer;"
+                onmouseover="this.setAttribute('stroke-width','40'); showIbcTooltip(event, '${tipM}')"
+                onmousemove="showIbcTooltip(event, '${tipM}')"
+                onmouseout="this.setAttribute('stroke-width','${sw}'); hideIbcTooltip()"/>` : ""}
+            ${mismatched > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dc2626" stroke-width="${sw}"
+                stroke-dasharray="${mmLen} ${circ}" stroke-dashoffset="${-mLen}" transform="rotate(-90 ${cx} ${cy})"
+                style="cursor:pointer;"
+                onmouseover="this.setAttribute('stroke-width','40'); showIbcTooltip(event, '${tipMM}')"
+                onmousemove="showIbcTooltip(event, '${tipMM}')"
+                onmouseout="this.setAttribute('stroke-width','${sw}'); hideIbcTooltip()"/>` : ""}
+
+            <text x="${cx}" y="${cy - 6}" text-anchor="middle" font-size="22" font-weight="800" fill="#003366">${mPct}%</text>
+            <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="12" font-weight="600" fill="#64748b">${total.toLocaleString()} ${unitLabel}</text>
+            <text x="${cx}" y="${cy + 28}" text-anchor="middle" font-size="10" fill="#94a3b8">${subLblText}</text>
+
+            <rect x="255" y="75" width="14" height="14" rx="3" fill="#16a34a"/>
+            <text x="276" y="87" font-size="13.5" font-weight="600" fill="#1e293b">Matched (${matched.toLocaleString()})</text>
+
+            <rect x="255" y="118" width="14" height="14" rx="3" fill="#dc2626"/>
+            <text x="276" y="130" font-size="13.5" font-weight="600" fill="#1e293b">Mismatch (${mismatched.toLocaleString()})</text>
+
+            <rect x="255" y="161" width="14" height="14" rx="3" fill="#6f42c1"/>
+            <text x="276" y="173" font-size="13.5" font-weight="700" fill="#6f42c1">Total (${total.toLocaleString()})</text>
+        </svg>`;
+    }
