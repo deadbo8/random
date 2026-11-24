@@ -1,7 +1,196 @@
-def _func_name(self, tbl_name: str) -> str:
-        meta = BSEG_TABLE_REGISTRY.get(tbl_name) or BILL_TABLE_REGISTRY.get(tbl_name) or {}
-        return meta.get("functional_name", tbl_name)
+def generate_executive_word_report(
+        self,
+        kpis: dict,
+        table_stats: dict,
+        results: dict,
+        charts_buf: dict,
+        output_dir: str,
+        task_id: str,
+        overall_mode: str = "bseg"
+    ) -> str:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from datetime import datetime
 
+        def set_cell_bg(cell, hex_color):
+            tcPr = cell._tc.get_or_add_tcPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), hex_color)
+            tcPr.append(shd)
 
+        def remove_table_borders(table):
+            tblPr = table._tbl.tblPr
+            borders = OxmlElement("w:tblBorders")
+            for b_name in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                b = OxmlElement(f"w:{b_name}")
+                b.set(qn("w:val"), "none")
+                borders.append(b)
+            tblPr.append(borders)
 
+        def aptos_run(p, text, size=10, bold=False, color=None):
+            r = p.add_run(text)
+            r.font.name = "Aptos"
+            r.font.size = Pt(size)
+            r.font.bold = bold
+            if color:
+                r.font.color.rgb = color
+            return r
 
+        doc = Document()
+        # Force default Normal style to Aptos
+        normal_style = doc.styles["Normal"]
+        normal_style.font.name = "Aptos"
+        normal_style.font.size = Pt(10)
+
+        for sec in doc.sections:
+            sec.top_margin = Inches(0.45)
+            sec.bottom_margin = Inches(0.45)
+            sec.left_margin = Inches(0.55)
+            sec.right_margin = Inches(0.55)
+
+        scope = results.get("scope", self.scope)
+        is_bill_scope = (scope == "bill_and_bseg")
+        criteria_names = ", ".join(self._func_name(t) for t in table_stats.keys()) if table_stats else "None"
+
+        # ---------------- 1. HEADER WITH PG&E LOGO (LEFT) & TCS LOGO (RIGHT) ----------------
+        img_dir = os.path.join(self.base_dir, "web", "static", "image")
+        pge_logo = next((os.path.join(img_dir, f) for f in ("PCG.png", "PGE.png", "pge.png") if os.path.exists(os.path.join(img_dir, f))), None)
+        tcs_logo = next((os.path.join(img_dir, f) for f in ("TCS.png", "tcs.png", "TCS_logo.png") if os.path.exists(os.path.join(img_dir, f))), None)
+
+        hdr_tbl = doc.add_table(rows=1, cols=3)
+        hdr_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        remove_table_borders(hdr_tbl)
+        hdr_tbl.cell(0, 0).width = Inches(1.2)
+        hdr_tbl.cell(0, 1).width = Inches(5.0)
+        hdr_tbl.cell(0, 2).width = Inches(1.2)
+
+        if pge_logo:
+            p_l = hdr_tbl.cell(0, 0).paragraphs[0]
+            p_l.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            p_l.add_run().add_picture(pge_logo, height=Inches(0.55))
+
+        p_mid = hdr_tbl.cell(0, 1).paragraphs[0]
+        p_mid.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        aptos_run(p_mid, f"RATE CALC TOOL  |  VERSION: {APP_VERSION}\n", size=8.5, bold=True, color=RGBColor(0, 114, 206))
+        aptos_run(p_mid, "PG&E CC&B 25.4 Upgrade — IBC Executive Validation Report", size=15, bold=True, color=RGBColor(0, 51, 102))
+
+        if tcs_logo:
+            p_r = hdr_tbl.cell(0, 2).paragraphs[0]
+            p_r.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            p_r.add_run().add_picture(tcs_logo, height=Inches(0.45))
+
+        sub_p = doc.add_paragraph()
+        sub_p.paragraph_format.space_before = Pt(4)
+        sub_p.paragraph_format.space_after = Pt(6)
+        aptos_run(
+            sub_p,
+            f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}  |  "
+            f"Environment: {self.env.upper()}  |  "
+            f"Scope: {'Bill + BSEG Level' if is_bill_scope else 'BSEG Level Only'}\n"
+            f"Criteria: {criteria_names}",
+            size=8.5, color=RGBColor(100, 116, 139)
+        )
+
+        # ---------------- 2. EXECUTIVE SUMMARY & PROCESS FLOW ----------------
+        tot_bills = kpis.get("total_bills", 0)
+        tot_bsegs = kpis.get("total_bsegs", 0)
+        matched = kpis.get("matched_rows", 0)
+        mismatched = kpis.get("mismatched_rows", 0)
+        exceptions = kpis.get("approved_exceptions", 0)
+        tot_rows = kpis.get("total_rows", matched + mismatched)
+        pass_rate = round((matched / max(tot_rows, 1)) * 100, 1)
+        verdict = "PASSED (100% RECONCILED)" if mismatched == 0 else f"ACTION REQUIRED ({mismatched:,} VARIANCES DETECTED)"
+
+        h1 = doc.add_paragraph()
+        h1.paragraph_format.space_before = Pt(4)
+        h1.paragraph_format.space_after = Pt(4)
+        aptos_run(h1, "1. Executive Summary & Business Narrative", size=12, bold=True, color=RGBColor(0, 51, 102))
+
+        p_narr = doc.add_paragraph()
+        p_narr.paragraph_format.space_after = Pt(5)
+        scope_phrase = (
+            f"across {tot_bills} Bill pair(s) and {tot_bsegs} paired Bill Segment(s) (BSEGs)"
+            if is_bill_scope else f"across {tot_bsegs} paired Bill Segment(s) (BSEGs)"
+        )
+        aptos_run(
+            p_narr,
+            f"This report represents the automated Individual Bill Comparison (IBC) validation results for the "
+            f"Oracle CC&B 25.4 Upgrade in the {self.env.upper()} environment. Cell-by-cell reconciliation "
+            f"{scope_phrase} have been performed, evaluating {tot_rows:,} records across the selected criteria.",
+            size=9.5
+        )
+
+        p_flow = doc.add_paragraph()
+        p_flow.paragraph_format.space_after = Pt(6)
+        aptos_run(p_flow, "Process flow – ", size=9.5, bold=True)
+        aptos_run(
+            p_flow,
+            f"Account moved from Prod to {self.env.upper()} environment → Cancel and Rebill each Bseg → "
+            f"Run the tool with Cancelled BSEG ID (prod generated) and New BSEG ID ({self.env.upper()} generated).",
+            size=9.5
+        )
+
+        p_verd = doc.add_paragraph()
+        p_verd.paragraph_format.space_after = Pt(6)
+        aptos_run(p_verd, "Overall Validation Verdict: ", size=9.5, bold=True)
+        aptos_run(p_verd, f"{verdict}\n", size=9.5, bold=True, color=RGBColor(22, 163, 74) if mismatched == 0 else RGBColor(220, 38, 38))
+        aptos_run(p_verd, f"• Approved 25.4 Exceptions: {exceptions:,} extra zero-dollar calculation lines accepted via business whitelist.", size=9.5)
+
+        p_conf = doc.add_paragraph()
+        p_conf.paragraph_format.space_after = Pt(6)
+        aptos_run(p_conf, "Overall confidence level - ", size=10, bold=True, color=RGBColor(0, 51, 102))
+
+        # KPI Table
+        kpi_tbl = doc.add_table(rows=2, cols=5)
+        kpi_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        kpi_headers = [
+            "Bills / BSEGs" if is_bill_scope else "BSEG Pairs",
+            "Total Records", "Matched Records", "Mismatched Records", "Row Pass Rate"
+        ]
+        kpi_vals = [
+            f"{tot_bills} / {tot_bsegs}" if is_bill_scope else f"{tot_bsegs}",
+            f"{tot_rows:,}", f"{matched:,}", f"{mismatched:,}", f"{pass_rate}%"
+        ]
+        for i, h_text in enumerate(kpi_headers):
+            c_hdr = kpi_tbl.cell(0, i)
+            set_cell_bg(c_hdr, "003366")
+            p = c_hdr.paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            aptos_run(p, h_text, size=9, bold=True, color=RGBColor(255, 255, 255))
+
+            c_val = kpi_tbl.cell(1, i)
+            set_cell_bg(c_val, "F8FAFC")
+            pv = c_val.paragraphs[0]
+            pv.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            aptos_run(pv, kpi_vals[i], size=11, bold=True, color=RGBColor(0, 51, 102))
+
+        # ---------------- 3. VISUAL VALIDATION BREAKDOWN (3 ALIGNED PIE CHARTS ONLY) ----------------
+        h2 = doc.add_paragraph()
+        h2.paragraph_format.space_before = Pt(10)
+        h2.paragraph_format.space_after = Pt(4)
+        aptos_run(h2, "2. Visual Validation Breakdown", size=12, bold=True, color=RGBColor(0, 51, 102))
+
+        pie_tbl = doc.add_table(rows=1, cols=3)
+        pie_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        remove_table_borders(pie_tbl)
+
+        for idx, pk in enumerate(("overall_bseg_png", "sq_png", "calc_ln_png")):
+            buf = charts_buf.get(pk)
+            if buf:
+                buf.seek(0)
+                cell = pie_tbl.cell(0, idx)
+                cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+                p_cell = cell.paragraphs[0]
+                p_cell.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p_cell.add_run().add_picture(buf, width=Inches(2.35))
+
+        docx_filename = f"IBC_Executive_Report_{task_id}.docx"
+        docx_path = os.path.join(output_dir, docx_filename)
+        doc.save(docx_path)
+        return docx_path
